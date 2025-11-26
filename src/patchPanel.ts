@@ -350,14 +350,23 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             cursor: pointer;
             padding: 0;
             margin: 0;
-            font-size: 16px;
+            font-size: 12px;
             opacity: 0.7;
             line-height: 1;
-            width: 16px;
-            height: 16px;
-            display: flex;
+            width: 14px;
+            height: 14px;
+            min-width: 14px;
+            min-height: 14px;
+            max-width: 14px;
+            max-height: 14px;
+            flex: none;
+            flex-shrink: 0;
+            flex-grow: 0;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
+            box-sizing: border-box;
         }
         .refresh-button:hover {
             opacity: 1;
@@ -387,7 +396,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
     <div class="section-title">
         <span>Available Patches</span>
-        <button id="refreshBtn" class="refresh-button" title="Refresh patch list">↻</button>
+        <button id="refreshBtn" class="refresh-button" title="Refresh patch list" aria-label="Refresh">↻</button>
     </div>
     <div class="patch-list" id="patchList">
         <div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">
