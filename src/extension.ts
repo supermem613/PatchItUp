@@ -3,12 +3,20 @@ import * as cp from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promisify } from 'util';
+import { PatchPanelProvider } from './patchPanel';
 
 const exec = promisify(cp.exec);
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('PatchItUp extension is now active');
 
+    // Register the webview panel provider
+    const provider = new PatchPanelProvider(context.extensionUri);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(PatchPanelProvider.viewType, provider)
+    );
+
+    // Register command for creating patch
     let disposable = vscode.commands.registerCommand('patchitup.createPatch', async () => {
         await createAndSavePatch();
     });

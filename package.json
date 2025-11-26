@@ -21,8 +21,35 @@
       {
         "command": "patchitup.createPatch",
         "title": "PatchItUp: Create and Save Patch"
+      },
+      {
+        "command": "patchitup.showPanel",
+        "title": "PatchItUp: Open Panel",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "patchitup.applyPatch",
+        "title": "PatchItUp: Apply Patch"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "patchitup-panel",
+          "title": "PatchItUp",
+          "icon": "$(diff)"
+        }
+      ]
+    },
+    "views": {
+      "patchitup-panel": [
+        {
+          "type": "webview",
+          "id": "patchitup.panelView",
+          "name": "Patch Manager"
+        }
+      ]
+    },
     "configuration": {
       "title": "PatchItUp",
       "properties": {
