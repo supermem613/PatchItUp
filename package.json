@@ -1,10 +1,11 @@
 {
   "name": "patchitup",
   "displayName": "PatchItUp",
-  "description": "Create git patches from Codespaces and save them to your local machine",
+  "description": "Create and apply git patches between GitHub Codespaces and your local machine with an intuitive sidebar UI",
   "version": "0.0.1",
   "publisher": "supermem613",
   "license": "MIT",
+  "icon": "images/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/supermem613/PatchItUp.git"
@@ -37,7 +38,7 @@
         {
           "id": "patchitup-panel",
           "title": "PatchItUp",
-          "icon": "$(diff)"
+          "icon": "images/icon.svg"
         }
       ]
     },

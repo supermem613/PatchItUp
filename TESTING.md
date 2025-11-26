@@ -15,7 +15,7 @@ When using F5 debugging, the Extension Development Host only runs temporarily an
 
 2. **Package the extension**
    ```bash
-   cd c:\Users\marcusm\repos\PatchItUp
+   cd c:\Users\foo\repos\PatchItUp
    vsce package
    ```
    This creates a `.vsix` file (e.g., `patchitup-0.0.1.vsix`)
@@ -63,7 +63,7 @@ If you need to test changes frequently:
    Windows:
    ```powershell
    $extensionsPath = "$env:USERPROFILE\.vscode\extensions"
-   New-Item -ItemType SymbolicLink -Path "$extensionsPath\patchitup" -Target "c:\Users\marcusm\repos\PatchItUp"
+   New-Item -ItemType SymbolicLink -Path "$extensionsPath\patchitup" -Target "c:\Users\foo\repos\PatchItUp"
    ```
 
 3. **Reload VS Code** (Ctrl+Shift+P → "Developer: Reload Window")
@@ -84,7 +84,7 @@ If you need to test changes frequently:
 When testing in a Codespace, make sure to set:
 
 - **Source Directory**: `/tmp` (or your Codespace path)
-- **Destination Path**: A path on your **local machine** (e.g., `C:\Users\marcusm\patches`)
+- **Destination Path**: A path on your **local machine** (e.g., `C:\Users\foo\patches`)
 - **Project Name**: Your project identifier
 
 The extension will read files from the Codespace but write the patch to your local machine.

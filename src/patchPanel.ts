@@ -339,6 +339,28 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             font-size: 13px;
             font-weight: bold;
             margin: 15px 0 8px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .refresh-button {
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            padding: 0;
+            margin: 0;
+            font-size: 16px;
+            opacity: 0.7;
+            line-height: 1;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .refresh-button:hover {
+            opacity: 1;
         }
         .button-container-bottom {
             margin-top: 10px;
@@ -363,7 +385,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         <button id="createPatchBtn">Create Patch</button>
     </div>
 
-    <div class="section-title">Available Patches</div>
+    <div class="section-title">
+        <span>Available Patches</span>
+        <button id="refreshBtn" class="refresh-button" title="Refresh patch list">↻</button>
+    </div>
     <div class="patch-list" id="patchList">
         <div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">
             No patches found
@@ -417,6 +442,17 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 projectName,
                 destPath
             });
+        });
+
+        // Refresh button
+        document.getElementById('refreshBtn').addEventListener('click', () => {
+            const destPath = document.getElementById('destPath').value;
+            if (destPath) {
+                vscode.postMessage({
+                    type: 'refreshPatches',
+                    destPath
+                });
+            }
         });
 
         // Apply patch button
