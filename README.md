@@ -18,6 +18,7 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from y
 ## 🖼️ Screenshots
 
 ![PatchItUp Sidebar](images/sidebar.png)
+
 *The PatchItUp panel showing configuration fields and available patches, allowing for creating and applying patches.*
 
 ## 🚀 Quick Start
@@ -103,8 +104,8 @@ Patch files use the standard git patch format and are named:
 {projectName}_{YYYYMMDDHHMMSS}.patch
 ```
 
-Example: `odsp-next_20251126143052.patch`
-- `odsp-next`: Project name
+Example: `tmp_20251126143052.patch`
+- `tmp`: Project name
 - `20251126`: Date (November 26, 2025)
 - `143052`: Time (14:30:52)
 - `.patch`: Extension
