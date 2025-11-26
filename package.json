@@ -2,7 +2,7 @@
   "name": "patchitup",
   "displayName": "PatchItUp",
   "description": "Create and apply git patches between GitHub Codespaces and your local machine with an intuitive sidebar UI",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "supermem613",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -15,6 +15,10 @@
   },
   "categories": [
     "Other"
+  ],
+  "extensionKind": [
+    "ui",
+    "workspace"
   ],
   "main": "./out/extension.js",
   "contributes": {
