@@ -1,0 +1,63 @@
+{
+  "name": "patchitup",
+  "displayName": "PatchItUp",
+  "description": "Create git patches from Codespaces and save them to your local machine",
+  "version": "0.0.1",
+  "publisher": "supermem613",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/supermem613/PatchItUp.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "patchitup.createPatch",
+        "title": "PatchItUp: Create and Save Patch"
+      }
+    ],
+    "configuration": {
+      "title": "PatchItUp",
+      "properties": {
+        "patchitup.sourceDirectory": {
+          "type": "string",
+          "default": "/tmp",
+          "description": "Directory to create the patch from"
+        },
+        "patchitup.projectName": {
+          "type": "string",
+          "default": "project",
+          "description": "Project name to prefix patch files"
+        },
+        "patchitup.destinationPath": {
+          "type": "string",
+          "default": "",
+          "description": "Local path on host machine to save patches (e.g., C:\\Users\\YourName\\patches)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.2"
+  }
+}
