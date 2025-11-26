@@ -1,16 +1,90 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
-import { promisify } from 'util';
-import * as cp from 'child_process';
-
-const exec = promisify(cp.exec);
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
     private _view?: vscode.WebviewView;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
+
+    // Execute git command and get output via temp file
+    private async executeGitCommand(args: string[], cwd: string): Promise<string> {
+        // Get any workspace folder (or use the first one if available)
+        let workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        
+        if (!workspaceFolder) {
+            throw new Error('No workspace folder open');
+        }
+
+        // Create temp file for output
+        const tempFileName = `.patchitup-temp-${Date.now()}.txt`;
+        
+        // If cwd matches the workspace path, use it directly; otherwise construct the URI
+        // This handles cases where cwd might be the full path like /workspaces/odsp-web
+        let cwdUri: vscode.Uri;
+        if (cwd === workspaceFolder.uri.fsPath || cwd === workspaceFolder.uri.path) {
+            cwdUri = workspaceFolder.uri;
+        } else if (cwd.startsWith('/') && workspaceFolder.uri.path === cwd) {
+            // Remote path matches exactly
+            cwdUri = workspaceFolder.uri;
+        } else {
+            // Try to construct URI with the cwd as is - it might be an absolute path in remote
+            cwdUri = workspaceFolder.uri.with({ path: cwd });
+        }
+            
+        const tempUri = vscode.Uri.joinPath(cwdUri, tempFileName);
+        console.log('executeGitCommand:', { cwd, workspacePath: workspaceFolder.uri.path, cwdUri: cwdUri.toString(), tempUri: tempUri.toString() });
+
+        try {
+            // Execute git command with output redirection (use relative path)
+            const shellCmd = `git ${args.join(' ')} > "${tempFileName}" 2>&1`;
+            
+            const execution = new vscode.ShellExecution(shellCmd, { cwd });
+            const task = new vscode.Task(
+                { type: 'shell' },
+                workspaceFolder,
+                'Git Command',
+                'patchitup',
+                execution
+            );
+
+            await new Promise<void>((resolve, reject) => {
+                vscode.tasks.executeTask(task).then(taskExecution => {
+                    const disposable = vscode.tasks.onDidEndTaskProcess(e => {
+                        if (e.execution === taskExecution) {
+                            disposable.dispose();
+                            if (e.exitCode === 0) {
+                                resolve();
+                            } else {
+                                reject(new Error(`Git command failed with exit code ${e.exitCode}`));
+                            }
+                        }
+                    });
+
+                    setTimeout(() => {
+                        disposable.dispose();
+                        reject(new Error('Command timeout'));
+                    }, 30000);
+                });
+            });
+
+            // Read the output file using workspace fs API
+            const outputBytes = await vscode.workspace.fs.readFile(tempUri);
+            const decoder = new TextDecoder();
+            const output = decoder.decode(outputBytes);
+
+            // Clean up
+            await vscode.workspace.fs.delete(tempUri);
+
+            return output;
+        } catch (error) {
+            // Try to clean up temp file
+            try {
+                await vscode.workspace.fs.delete(tempUri);
+            } catch {}
+            throw error;
+        }
+    }
 
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
@@ -41,11 +115,19 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 case 'getSettings':
                     await this.sendSettings();
                     break;
+                case 'updateSetting':
+                    await this.updateSetting(data.key, data.value);
+                    break;
             }
         });
 
         // Send initial settings
         this.sendSettings();
+    }
+
+    private async updateSetting(key: string, value: string) {
+        const config = vscode.workspace.getConfiguration('patchitup');
+        await config.update(key, value, vscode.ConfigurationTarget.Global);
     }
 
     private async sendSettings() {
@@ -67,54 +149,126 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     private async refreshPatchList(destPath: string) {
-        if (!this._view || !destPath) return;
+        console.log('refreshPatchList called:', { hasView: !!this._view, destPath });
+        
+        if (!this._view) {
+            console.log('refreshPatchList: view not available');
+            vscode.window.showWarningMessage('PatchItUp: View not available for refresh');
+            return;
+        }
+        
+        if (!destPath) {
+            console.log('refreshPatchList: destPath not provided');
+            vscode.window.showWarningMessage('PatchItUp: Destination path not configured');
+            this._view.webview.postMessage({
+                type: 'patchList',
+                patches: []
+            });
+            return;
+        }
 
         try {
             const isRemote = vscode.env.remoteName !== undefined;
+            console.log('refreshPatchList:', { isRemote, remoteName: vscode.env.remoteName, destPath, uiKind: vscode.env.uiKind });
             let patches: string[] = [];
 
-            if (isRemote) {
-                // In Codespace: read from local machine
-                const dirUri = vscode.Uri.file(destPath).with({ scheme: 'vscode-local' });
-                try {
-                    const files = await vscode.workspace.fs.readDirectory(dirUri);
-                    patches = files
-                        .filter(([name, type]) => type === vscode.FileType.File && name.endsWith('.patch'))
-                        .map(([name]) => name)
-                        .sort((a, b) => {
-                            // Extract timestamp from filename (format: projectname_YYYYMMDDHHMMSS.patch)
-                            const getTimestamp = (filename: string) => {
-                                const match = filename.match(/_([0-9]{14})\.patch$/);
-                                return match ? match[1] : '0';
-                            };
-                            return getTimestamp(b).localeCompare(getTimestamp(a)); // Descending
-                        });
-                } catch {
+            // Always try vscode-local first (for remote scenarios), fall back to regular file
+            let dirUri = vscode.Uri.file(destPath).with({ scheme: 'vscode-local' });
+            console.log('Trying vscode-local URI:', dirUri.toString());
+            
+            try {
+                const files = await vscode.workspace.fs.readDirectory(dirUri);
+                console.log('Found files with vscode-local:', files.length);
+                
+                // Get file stats for each patch file
+                const patchFiles = files
+                    .filter(([name, type]) => {
+                        const isPatch = type === vscode.FileType.File && name.endsWith('.patch');
+                        if (isPatch) console.log('Found patch file:', name);
+                        return isPatch;
+                    })
+                    .map(([name]) => name);
+                
+                // Get creation times for all patch files
+                const filesWithStats = await Promise.all(
+                    patchFiles.map(async (name) => {
+                        const fileUri = vscode.Uri.joinPath(dirUri, name);
+                        const stat = await vscode.workspace.fs.stat(fileUri);
+                        return { name, ctime: stat.ctime };
+                    })
+                );
+                
+                // Sort by creation time, newest first
+                patches = filesWithStats
+                    .sort((a, b) => {
+                        console.log('Comparing:', a.name, '(', a.ctime, ') vs', b.name, '(', b.ctime, '), result:', b.ctime - a.ctime);
+                        return b.ctime - a.ctime;
+                    })
+                    .map(f => f.name);
+                console.log('Filtered patches:', patches);
+            } catch (error: any) {
+                // If vscode-local fails, try regular file scheme (for local-only scenarios)
+                console.log('vscode-local failed, error:', error, 'code:', error.code, 'name:', error.name);
+                if (error.code === 'ENOPRO' || error.name === 'EntryNotFound (FileSystemError)' || error.message?.includes('No file system provider')) {
+                    console.log('Fallback: trying regular file scheme');
+                    try {
+                        dirUri = vscode.Uri.file(destPath);
+                        console.log('Using file URI:', dirUri.toString());
+                        const files = await vscode.workspace.fs.readDirectory(dirUri);
+                        console.log('Found files with file scheme:', files.length);
+                        
+                        // Get file stats for each patch file
+                        const patchFiles = files
+                            .filter(([name, type]) => {
+                                const isPatch = type === vscode.FileType.File && name.endsWith('.patch');
+                                if (isPatch) console.log('Found patch file:', name);
+                                return isPatch;
+                            })
+                            .map(([name]) => name);
+                        
+                        // Get creation times for all patch files
+                        const filesWithStats = await Promise.all(
+                            patchFiles.map(async (name) => {
+                                const fileUri = vscode.Uri.joinPath(dirUri, name);
+                                const stat = await vscode.workspace.fs.stat(fileUri);
+                                return { name, ctime: stat.ctime };
+                            })
+                        );
+                        
+                        // Sort by creation time, newest first
+                        patches = filesWithStats
+                            .sort((a, b) => {
+                                console.log('Comparing:', a.name, '(', a.ctime, ') vs', b.name, '(', b.ctime, '), result:', b.ctime - a.ctime);
+                                return b.ctime - a.ctime;
+                            })
+                            .map(f => f.name);
+                        console.log('Filtered patches:', patches);
+                    } catch (innerError: any) {
+                        console.error('Error reading with file scheme:', innerError);
+                        vscode.window.showErrorMessage(`Could not read patches from ${destPath}: ${innerError.message || innerError}`);
+                        patches = [];
+                    }
+                } else {
+                    console.error('Error reading directory (not fallback case):', error);
+                    vscode.window.showErrorMessage(`Could not read patches from ${destPath}: ${error.message || error}`);
                     patches = [];
-                }
-            } else {
-                // Local: read normally
-                if (fs.existsSync(destPath)) {
-                    patches = fs.readdirSync(destPath)
-                        .filter(file => file.endsWith('.patch'))
-                        .sort((a, b) => {
-                            // Extract timestamp from filename (format: projectname_YYYYMMDDHHMMSS.patch)
-                            const getTimestamp = (filename: string) => {
-                                const match = filename.match(/_([0-9]{14})\.patch$/);
-                                return match ? match[1] : '0';
-                            };
-                            return getTimestamp(b).localeCompare(getTimestamp(a)); // Descending
-                        });
                 }
             }
 
+            console.log('Sending patch list to webview:', patches.length, 'patches');
             this._view.webview.postMessage({
                 type: 'patchList',
                 patches
             });
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error refreshing patch list:', error);
+            vscode.window.showErrorMessage(`Error refreshing patch list: ${error.message || error}`);
         }
+    }
+
+    // Public method that can be called from the command
+    public async createPatchFromCommand(sourceDir: string, projectName: string, destPath: string) {
+        await this.createPatch(sourceDir, projectName, destPath);
     }
 
     private async createPatch(sourceDir: string, projectName: string, destPath: string) {
@@ -124,23 +278,25 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            if (!fs.existsSync(sourceDir)) {
-                vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+            const isRemote = vscode.env.remoteName !== undefined;
+            console.log('createPatch:', { isRemote, sourceDir, destPath });
+
+            // Check for changes using executeGitCommand
+            let patchContent: string;
+            try {
+                patchContent = await this.executeGitCommand(['diff', 'HEAD'], sourceDir);
+
+                if (!patchContent.trim()) {
+                    vscode.window.showInformationMessage('No changes to create a patch from.');
+                    return;
+                }
+            } catch (error: any) {
+                const msg = isRemote 
+                    ? `Could not access source directory in Codespace: ${sourceDir}\n\n${error.message}`
+                    : `Could not access source directory: ${sourceDir}\n\n${error.message}`;
+                vscode.window.showErrorMessage(msg);
                 return;
             }
-
-            // Check for changes
-            const statusCmd = `cd "${sourceDir}" && git status --porcelain`;
-            const { stdout: statusOutput } = await exec(statusCmd);
-
-            if (!statusOutput.trim()) {
-                vscode.window.showInformationMessage('No changes to create a patch from.');
-                return;
-            }
-
-            // Create the patch
-            const patchCmd = `cd "${sourceDir}" && git diff HEAD`;
-            const { stdout: patchContent } = await exec(patchCmd);
 
             if (!patchContent.trim()) {
                 vscode.window.showInformationMessage('No changes to create a patch from.');
@@ -160,27 +316,32 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             
             const filename = `${projectName}_${timestamp}.patch`;
             
-            // Write using VS Code's file system API
-            const isRemote = vscode.env.remoteName !== undefined;
-            let destinationUri: vscode.Uri;
-            
-            if (isRemote) {
-                destinationUri = vscode.Uri.file(path.join(destPath, filename)).with({ scheme: 'vscode-local' });
-            } else {
-                destinationUri = vscode.Uri.file(path.join(destPath, filename));
-            }
-
+            // Write using VS Code's file system API - try vscode-local first, fall back to file
             const encoder = new TextEncoder();
             const patchBytes = encoder.encode(patchContent);
             
-            const dirUri = vscode.Uri.joinPath(destinationUri, '..');
-            try {
-                await vscode.workspace.fs.createDirectory(dirUri);
-            } catch {
-                // Directory might already exist
-            }
+            let destinationUri = vscode.Uri.file(path.join(destPath, filename)).with({ scheme: 'vscode-local' });
+            let dirUri = vscode.Uri.joinPath(destinationUri, '..');
             
-            await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
+            try {
+                console.log('Attempting to write patch with vscode-local scheme to:', destinationUri.toString());
+                await vscode.workspace.fs.createDirectory(dirUri);
+                await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
+                console.log('Successfully wrote patch with vscode-local');
+            } catch (error: any) {
+                // If vscode-local fails, try regular file scheme
+                console.log('vscode-local write failed, error:', error, 'code:', error.code);
+                if (error.code === 'ENOPRO' || error.message?.includes('No file system provider')) {
+                    console.log('Fallback: trying regular file scheme for write');
+                    destinationUri = vscode.Uri.file(path.join(destPath, filename));
+                    dirUri = vscode.Uri.joinPath(destinationUri, '..');
+                    await vscode.workspace.fs.createDirectory(dirUri);
+                    await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
+                    console.log('Successfully wrote patch with file scheme');
+                } else {
+                    throw error;
+                }
+            }
 
             vscode.window.showInformationMessage(`Patch created: ${filename}`);
             await this.refreshPatchList(destPath);
@@ -197,11 +358,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            if (!fs.existsSync(sourceDir)) {
-                vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
-                return;
-            }
-
             const config = vscode.workspace.getConfiguration('patchitup');
             const destPath = config.get<string>('destinationPath', '');
 
@@ -210,36 +366,50 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            // Read the patch file from local machine
-            const isRemote = vscode.env.remoteName !== undefined;
+            console.log('applyPatch:', { patchFile, sourceDir, destPath });
+
+            // Read the patch file from local machine - try vscode-local first
             let patchContent: string;
-
-            if (isRemote) {
-                const patchUri = vscode.Uri.file(path.join(destPath, patchFile)).with({ scheme: 'vscode-local' });
-                const patchBytes = await vscode.workspace.fs.readFile(patchUri);
-                const decoder = new TextDecoder();
-                patchContent = decoder.decode(patchBytes);
-            } else {
-                patchContent = fs.readFileSync(path.join(destPath, patchFile), 'utf8');
-            }
-
-            // Write patch content to a temp file in the Codespace
-            const tempPatchPath = path.join(sourceDir, '.patchitup-temp.patch');
-            fs.writeFileSync(tempPatchPath, patchContent, 'utf8');
+            const decoder = new TextDecoder();
 
             try {
-                // Apply the patch
-                const applyCmd = `cd "${sourceDir}" && git apply "${tempPatchPath}"`;
-                await exec(applyCmd);
+                console.log('Attempting to read patch with vscode-local scheme');
+                const patchUri = vscode.Uri.file(path.join(destPath, patchFile)).with({ scheme: 'vscode-local' });
+                const patchBytes = await vscode.workspace.fs.readFile(patchUri);
+                patchContent = decoder.decode(patchBytes);
+                console.log('Successfully read patch with vscode-local');
+            } catch (error: any) {
+                // If vscode-local fails, try regular file scheme
+                console.log('vscode-local read failed, error:', error, 'code:', error.code);
+                if (error.code === 'ENOPRO' || error.message?.includes('No file system provider')) {
+                    console.log('Fallback: trying regular file scheme for read');
+                    const patchUri = vscode.Uri.file(path.join(destPath, patchFile));
+                    const patchBytes = await vscode.workspace.fs.readFile(patchUri);
+                    patchContent = decoder.decode(patchBytes);
+                    console.log('Successfully read patch with file scheme');
+                } else {
+                    throw error;
+                }
+            }
 
+            // Write patch to temp file in workspace and apply it using git command
+            const tempPatchFile = path.join(sourceDir, '.patchitup-temp.patch');
+            const tempPatchUri = vscode.Uri.file(tempPatchFile);
+            const encoder = new TextEncoder();
+            await vscode.workspace.fs.writeFile(tempPatchUri, encoder.encode(patchContent));
+
+            try {
+                // Apply using git command via Task API
+                await this.executeGitCommand(['apply', tempPatchFile], sourceDir);
                 vscode.window.showInformationMessage(`Patch applied successfully: ${patchFile}`);
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                vscode.window.showErrorMessage(`Failed to apply patch: ${errorMessage}`);
+            } catch (error: any) {
+                vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
             } finally {
                 // Clean up temp file
-                if (fs.existsSync(tempPatchPath)) {
-                    fs.unlinkSync(tempPatchPath);
+                try {
+                    await vscode.workspace.fs.delete(tempPatchUri);
+                } catch {
+                    // Ignore cleanup errors
                 }
             }
         } catch (error) {
@@ -507,9 +677,33 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         // Refresh patches when destination path changes
         document.getElementById('destPath').addEventListener('change', (e) => {
+            const destPath = e.target.value;
+            vscode.postMessage({
+                type: 'updateSetting',
+                key: 'destinationPath',
+                value: destPath
+            });
             vscode.postMessage({
                 type: 'refreshPatches',
-                destPath: e.target.value
+                destPath: destPath
+            });
+        });
+
+        // Update settings when source directory changes
+        document.getElementById('sourceDir').addEventListener('change', (e) => {
+            vscode.postMessage({
+                type: 'updateSetting',
+                key: 'sourceDirectory',
+                value: e.target.value
+            });
+        });
+
+        // Update settings when project name changes
+        document.getElementById('projectName').addEventListener('change', (e) => {
+            vscode.postMessage({
+                type: 'updateSetting',
+                key: 'projectName',
+                value: e.target.value
             });
         });
     </script>
