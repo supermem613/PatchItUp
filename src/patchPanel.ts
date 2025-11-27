@@ -78,10 +78,24 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
             return output;
         } catch (error) {
+            // Try to read the output before cleaning up to get error details
+            let errorOutput = '';
+            try {
+                const outputBytes = await vscode.workspace.fs.readFile(tempUri);
+                const decoder = new TextDecoder();
+                errorOutput = decoder.decode(outputBytes);
+            } catch {}
+
             // Try to clean up temp file
             try {
                 await vscode.workspace.fs.delete(tempUri);
             } catch {}
+            
+            // Include the git error output in the error message if available
+            if (errorOutput.trim()) {
+                const originalMessage = error instanceof Error ? error.message : String(error);
+                throw new Error(`${originalMessage}\nGit output: ${errorOutput.trim()}`);
+            }
             throw error;
         }
     }
@@ -393,14 +407,31 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             }
 
             // Write patch to temp file in workspace and apply it using git command
-            const tempPatchFile = path.join(sourceDir, '.patchitup-temp.patch');
-            const tempPatchUri = vscode.Uri.file(tempPatchFile);
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            if (!workspaceFolder) {
+                throw new Error('No workspace folder open');
+            }
+
+            // Construct URI for temp patch file in the workspace
+            let cwdUri: vscode.Uri;
+            if (sourceDir === workspaceFolder.uri.fsPath || sourceDir === workspaceFolder.uri.path) {
+                cwdUri = workspaceFolder.uri;
+            } else if (sourceDir.startsWith('/') && workspaceFolder.uri.path === sourceDir) {
+                cwdUri = workspaceFolder.uri;
+            } else {
+                cwdUri = workspaceFolder.uri.with({ path: sourceDir });
+            }
+
+            const tempPatchFileName = '.patchitup-apply-temp.patch';
+            const tempPatchUri = vscode.Uri.joinPath(cwdUri, tempPatchFileName);
             const encoder = new TextEncoder();
             await vscode.workspace.fs.writeFile(tempPatchUri, encoder.encode(patchContent));
+            console.log('Wrote temp patch file:', tempPatchUri.toString());
 
             try {
-                // Apply using git command via Task API
-                await this.executeGitCommand(['apply', tempPatchFile], sourceDir);
+                // Apply using git command via Task API (use relative filename)
+                const output = await this.executeGitCommand(['apply', tempPatchFileName], sourceDir);
+                console.log('Git apply output:', output);
                 vscode.window.showInformationMessage(`Patch applied successfully: ${patchFile}`);
             } catch (error: any) {
                 vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
@@ -657,6 +688,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 patchList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">No patches found</div>';
                 selectedPatch = null;
                 applyBtn.disabled = true;
+                applyBtn.classList.add('secondary-button');
                 return;
             }
 
@@ -670,6 +702,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     item.classList.add('selected');
                     selectedPatch = patch;
                     applyBtn.disabled = false;
+                    applyBtn.classList.remove('secondary-button');
                 });
                 patchList.appendChild(item);
             });
