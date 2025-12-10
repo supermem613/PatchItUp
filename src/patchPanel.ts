@@ -1,11 +1,132 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
     private _view?: vscode.WebviewView;
+    private _isRemoteLocalMachine: boolean | undefined;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
+
+    /**
+     * Determines if the current remote environment is actually the local machine.
+     * This can happen with:
+     * - WSL on the same Windows machine
+     * - Dev Containers running locally
+     * - SSH to localhost
+     * 
+     * When the remote IS the local machine, we can use regular file:// scheme
+     * instead of vscode-local:// for better performance and simpler code paths.
+     */
+    private async isRemoteLocalMachine(): Promise<boolean> {
+        // Cache the result since this shouldn't change during a session
+        if (this._isRemoteLocalMachine !== undefined) {
+            return this._isRemoteLocalMachine;
+        }
+
+        const remoteName = vscode.env.remoteName;
+        
+        // Not running remotely at all
+        if (remoteName === undefined) {
+            this._isRemoteLocalMachine = false;
+            console.log('isRemoteLocalMachine: not remote, returning false');
+            return false;
+        }
+
+        console.log('isRemoteLocalMachine: checking remote type:', remoteName);
+
+        // WSL is always on the local machine
+        if (remoteName === 'wsl') {
+            this._isRemoteLocalMachine = true;
+            console.log('isRemoteLocalMachine: WSL detected, returning true');
+            return true;
+        }
+
+        // Dev Containers can be local or remote - check if Docker is running locally
+        if (remoteName === 'dev-container' || remoteName === 'attached-container') {
+            // Dev containers running locally typically have access to the same hostname
+            // We can check if the container's hostname resolves to localhost-like addresses
+            try {
+                const hostname = os.hostname();
+                // If we can get the hostname and it matches common local patterns, it's local
+                const isLocal = this.isLocalhostHostname(hostname);
+                this._isRemoteLocalMachine = isLocal;
+                console.log('isRemoteLocalMachine: Dev Container, hostname:', hostname, 'isLocal:', isLocal);
+                return isLocal;
+            } catch {
+                // If we can't determine, assume it's not local (safer default)
+                this._isRemoteLocalMachine = false;
+                return false;
+            }
+        }
+
+        // SSH could be to localhost
+        if (remoteName === 'ssh-remote') {
+            // Try to detect if SSH is to localhost by checking environment or hostname
+            try {
+                const hostname = os.hostname();
+                const isLocal = this.isLocalhostHostname(hostname);
+                this._isRemoteLocalMachine = isLocal;
+                console.log('isRemoteLocalMachine: SSH, hostname:', hostname, 'isLocal:', isLocal);
+                return isLocal;
+            } catch {
+                this._isRemoteLocalMachine = false;
+                return false;
+            }
+        }
+
+        // Codespaces and other cloud-based remotes are never local
+        if (remoteName === 'codespaces' || remoteName === 'github-codespaces') {
+            this._isRemoteLocalMachine = false;
+            console.log('isRemoteLocalMachine: Codespaces detected, returning false');
+            return false;
+        }
+
+        // For unknown remote types, default to not local (safer)
+        this._isRemoteLocalMachine = false;
+        console.log('isRemoteLocalMachine: unknown remote type, returning false');
+        return false;
+    }
+
+    /**
+     * Checks if a hostname indicates localhost
+     */
+    private isLocalhostHostname(hostname: string): boolean {
+        const lowerHostname = hostname.toLowerCase();
+        return lowerHostname === 'localhost' ||
+               lowerHostname === '127.0.0.1' ||
+               lowerHostname === '::1' ||
+               lowerHostname.endsWith('.local') ||
+               lowerHostname.startsWith('localhost');
+    }
+
+    /**
+     * Determines if we should use the vscode-local scheme for accessing local files.
+     * Returns true only when running in a true remote environment (not local machine).
+     */
+    private async shouldUseVscodeLocalScheme(): Promise<boolean> {
+        const isRemote = vscode.env.remoteName !== undefined;
+        if (!isRemote) {
+            return false;
+        }
+        
+        const isLocalMachine = await this.isRemoteLocalMachine();
+        // Use vscode-local only when remote AND not the local machine
+        return !isLocalMachine;
+    }
+
+    /**
+     * Gets the appropriate URI for a local file path, taking into account
+     * whether we're in a remote environment that needs the vscode-local scheme.
+     */
+    private async getLocalFileUri(filePath: string): Promise<vscode.Uri> {
+        const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+        if (useVscodeLocal) {
+            return vscode.Uri.file(filePath).with({ scheme: 'vscode-local' });
+        }
+        return vscode.Uri.file(filePath);
+    }
 
     // Execute git command and get output via temp file
     private async executeGitCommand(args: string[], cwd: string): Promise<string> {
@@ -183,16 +304,18 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         try {
             const isRemote = vscode.env.remoteName !== undefined;
-            console.log('refreshPatchList:', { isRemote, remoteName: vscode.env.remoteName, destPath, uiKind: vscode.env.uiKind });
+            const isRemoteLocal = await this.isRemoteLocalMachine();
+            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+            console.log('refreshPatchList:', { isRemote, isRemoteLocal, useVscodeLocal, remoteName: vscode.env.remoteName, destPath, uiKind: vscode.env.uiKind });
             let patches: string[] = [];
 
-            // Always try vscode-local first (for remote scenarios), fall back to regular file
-            let dirUri = vscode.Uri.file(destPath).with({ scheme: 'vscode-local' });
-            console.log('Trying vscode-local URI:', dirUri.toString());
+            // Use the appropriate URI scheme based on environment detection
+            let dirUri = await this.getLocalFileUri(destPath);
+            console.log('Using URI:', dirUri.toString());
             
             try {
                 const files = await vscode.workspace.fs.readDirectory(dirUri);
-                console.log('Found files with vscode-local:', files.length);
+                console.log('Found files:', files.length);
                 
                 // Get file stats for each patch file
                 const patchFiles = files
@@ -221,9 +344,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     .map(f => f.name);
                 console.log('Filtered patches:', patches);
             } catch (error: any) {
-                // If vscode-local fails, try regular file scheme (for local-only scenarios)
-                console.log('vscode-local failed, error:', error, 'code:', error.code, 'name:', error.name);
-                if (error.code === 'ENOPRO' || error.name === 'EntryNotFound (FileSystemError)' || error.message?.includes('No file system provider')) {
+                // If vscode-local fails and we're using it, try regular file scheme as fallback
+                console.log('Initial scheme failed, error:', error, 'code:', error.code, 'name:', error.name);
+                if (useVscodeLocal && (error.code === 'ENOPRO' || error.name === 'EntryNotFound (FileSystemError)' || error.message?.includes('No file system provider'))) {
                     console.log('Fallback: trying regular file scheme');
                     try {
                         dirUri = vscode.Uri.file(destPath);
@@ -293,7 +416,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             }
 
             const isRemote = vscode.env.remoteName !== undefined;
-            console.log('createPatch:', { isRemote, sourceDir, destPath });
+            const isRemoteLocal = await this.isRemoteLocalMachine();
+            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+            console.log('createPatch:', { isRemote, isRemoteLocal, useVscodeLocal, sourceDir, destPath });
 
             // Check for changes using executeGitCommand
             let patchContent: string;
@@ -305,9 +430,15 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     return;
                 }
             } catch (error: any) {
-                const msg = isRemote 
-                    ? `Could not access source directory in Codespace: ${sourceDir}\n\n${error.message}`
-                    : `Could not access source directory: ${sourceDir}\n\n${error.message}`;
+                // Provide context-appropriate error message
+                let msg: string;
+                if (isRemote && !isRemoteLocal) {
+                    msg = `Could not access source directory in remote environment: ${sourceDir}\n\n${error.message}`;
+                } else if (isRemote && isRemoteLocal) {
+                    msg = `Could not access source directory (local remote): ${sourceDir}\n\n${error.message}`;
+                } else {
+                    msg = `Could not access source directory: ${sourceDir}\n\n${error.message}`;
+                }
                 vscode.window.showErrorMessage(msg);
                 return;
             }
@@ -330,22 +461,22 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             
             const filename = `${projectName}_${timestamp}.patch`;
             
-            // Write using VS Code's file system API - try vscode-local first, fall back to file
+            // Write using VS Code's file system API with appropriate scheme
             const encoder = new TextEncoder();
             const patchBytes = encoder.encode(patchContent);
             
-            let destinationUri = vscode.Uri.file(path.join(destPath, filename)).with({ scheme: 'vscode-local' });
+            let destinationUri = await this.getLocalFileUri(path.join(destPath, filename));
             let dirUri = vscode.Uri.joinPath(destinationUri, '..');
             
             try {
-                console.log('Attempting to write patch with vscode-local scheme to:', destinationUri.toString());
+                console.log('Attempting to write patch to:', destinationUri.toString());
                 await vscode.workspace.fs.createDirectory(dirUri);
                 await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
-                console.log('Successfully wrote patch with vscode-local');
+                console.log('Successfully wrote patch');
             } catch (error: any) {
-                // If vscode-local fails, try regular file scheme
-                console.log('vscode-local write failed, error:', error, 'code:', error.code);
-                if (error.code === 'ENOPRO' || error.message?.includes('No file system provider')) {
+                // If vscode-local fails and we were using it, try regular file scheme as fallback
+                console.log('Write failed, error:', error, 'code:', error.code);
+                if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
                     console.log('Fallback: trying regular file scheme for write');
                     destinationUri = vscode.Uri.file(path.join(destPath, filename));
                     dirUri = vscode.Uri.joinPath(destinationUri, '..');
@@ -380,22 +511,23 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            console.log('applyPatch:', { patchFile, sourceDir, destPath });
+            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+            console.log('applyPatch:', { patchFile, sourceDir, destPath, useVscodeLocal });
 
-            // Read the patch file from local machine - try vscode-local first
+            // Read the patch file from local machine using appropriate scheme
             let patchContent: string;
             const decoder = new TextDecoder();
 
             try {
-                console.log('Attempting to read patch with vscode-local scheme');
-                const patchUri = vscode.Uri.file(path.join(destPath, patchFile)).with({ scheme: 'vscode-local' });
+                const patchUri = await this.getLocalFileUri(path.join(destPath, patchFile));
+                console.log('Attempting to read patch from:', patchUri.toString());
                 const patchBytes = await vscode.workspace.fs.readFile(patchUri);
                 patchContent = decoder.decode(patchBytes);
-                console.log('Successfully read patch with vscode-local');
+                console.log('Successfully read patch');
             } catch (error: any) {
-                // If vscode-local fails, try regular file scheme
-                console.log('vscode-local read failed, error:', error, 'code:', error.code);
-                if (error.code === 'ENOPRO' || error.message?.includes('No file system provider')) {
+                // If vscode-local fails and we were using it, try regular file scheme as fallback
+                console.log('Read failed, error:', error, 'code:', error.code);
+                if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
                     console.log('Fallback: trying regular file scheme for read');
                     const patchUri = vscode.Uri.file(path.join(destPath, patchFile));
                     const patchBytes = await vscode.workspace.fs.readFile(patchUri);
