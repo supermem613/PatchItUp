@@ -1,8 +1,8 @@
 {
   "name": "patchitup",
   "displayName": "PatchItUp",
-  "description": "Create and apply git patches between GitHub Codespaces and your local machine with an intuitive sidebar UI",
-  "version": "0.0.3",
+  "description": "Create and apply git patches for local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes with an intuitive sidebar UI",
+  "version": "0.0.4",
   "publisher": "supermem613",
   "license": "MIT",
   "icon": "images/icon.png",
