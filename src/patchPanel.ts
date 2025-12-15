@@ -140,27 +140,56 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         // Create temp file for output
         const tempFileName = `.patchitup-temp-${Date.now()}.txt`;
         
+        // Determine if we're in a remote environment (Codespaces, SSH, WSL, etc.)
+        // Remote URIs have an authority component, local file:// URIs don't
+        const isRemote = !!workspaceFolder.uri.authority;
+        
         // If cwd matches the workspace path, use it directly; otherwise construct the URI
         // This handles cases where cwd might be the full path like /workspaces/odsp-web
         let cwdUri: vscode.Uri;
-        if (cwd === workspaceFolder.uri.fsPath || cwd === workspaceFolder.uri.path) {
+        let shellCwd: string;
+        
+        // Normalize the cwd based on environment
+        // - Remote (Linux-based): use forward slashes
+        // - Local Windows: preserve backslashes
+        const normalizedCwd = isRemote 
+            ? cwd.trim().replace(/\\/g, '/')
+            : cwd.trim();
+        
+        // Get the workspace path in the appropriate format
+        // - Remote: use uri.path (always forward slashes)
+        // - Local: use fsPath (OS-native separators)
+        const workspacePath = isRemote ? workspaceFolder.uri.path : workspaceFolder.uri.fsPath;
+        
+        if (normalizedCwd === workspacePath || normalizedCwd === workspaceFolder.uri.path || normalizedCwd === workspaceFolder.uri.fsPath) {
+            // Direct match with workspace
             cwdUri = workspaceFolder.uri;
-        } else if (cwd.startsWith('/') && workspaceFolder.uri.path === cwd) {
-            // Remote path matches exactly
-            cwdUri = workspaceFolder.uri;
+            shellCwd = workspacePath;
         } else {
-            // Try to construct URI with the cwd as is - it might be an absolute path in remote
-            cwdUri = workspaceFolder.uri.with({ path: cwd });
+            // Custom path - construct URI appropriately
+            if (isRemote) {
+                // Remote: ensure path starts with / and uses forward slashes
+                let remotePath = normalizedCwd;
+                if (!remotePath.startsWith('/')) {
+                    remotePath = '/' + remotePath;
+                }
+                cwdUri = workspaceFolder.uri.with({ path: remotePath });
+                shellCwd = remotePath;
+            } else {
+                // Local: use the path as-is (with native separators)
+                cwdUri = vscode.Uri.file(normalizedCwd);
+                shellCwd = normalizedCwd;
+            }
         }
             
         const tempUri = vscode.Uri.joinPath(cwdUri, tempFileName);
-        console.log('executeGitCommand:', { cwd, workspacePath: workspaceFolder.uri.path, cwdUri: cwdUri.toString(), tempUri: tempUri.toString() });
+        console.log('executeGitCommand:', { cwd, normalizedCwd, shellCwd, workspacePath, isRemote, cwdUri: cwdUri.toString(), tempUri: tempUri.toString() });
 
         try {
             // Execute git command with output redirection (use relative path)
             const shellCmd = `git ${args.join(' ')} > "${tempFileName}" 2>&1`;
             
-            const execution = new vscode.ShellExecution(shellCmd, { cwd });
+            const execution = new vscode.ShellExecution(shellCmd, { cwd: shellCwd });
             const task = new vscode.Task(
                 { type: 'shell' },
                 workspaceFolder,
@@ -544,14 +573,33 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 throw new Error('No workspace folder open');
             }
 
+            // Determine if we're in a remote environment
+            const isRemote = !!workspaceFolder.uri.authority;
+            
+            // Normalize sourceDir based on environment
+            const normalizedSourceDir = isRemote 
+                ? sourceDir.trim().replace(/\\/g, '/')
+                : sourceDir.trim();
+            
+            // Get the workspace path in the appropriate format
+            const workspacePath = isRemote ? workspaceFolder.uri.path : workspaceFolder.uri.fsPath;
+
             // Construct URI for temp patch file in the workspace
             let cwdUri: vscode.Uri;
-            if (sourceDir === workspaceFolder.uri.fsPath || sourceDir === workspaceFolder.uri.path) {
-                cwdUri = workspaceFolder.uri;
-            } else if (sourceDir.startsWith('/') && workspaceFolder.uri.path === sourceDir) {
+            if (normalizedSourceDir === workspacePath || normalizedSourceDir === workspaceFolder.uri.path || normalizedSourceDir === workspaceFolder.uri.fsPath) {
                 cwdUri = workspaceFolder.uri;
             } else {
-                cwdUri = workspaceFolder.uri.with({ path: sourceDir });
+                if (isRemote) {
+                    // Remote: ensure path starts with / and uses forward slashes
+                    let remotePath = normalizedSourceDir;
+                    if (!remotePath.startsWith('/')) {
+                        remotePath = '/' + remotePath;
+                    }
+                    cwdUri = workspaceFolder.uri.with({ path: remotePath });
+                } else {
+                    // Local: use the path as-is
+                    cwdUri = vscode.Uri.file(normalizedSourceDir);
+                }
             }
 
             const tempPatchFileName = '.patchitup-apply-temp.patch';
