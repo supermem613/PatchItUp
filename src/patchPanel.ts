@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs/promises';
 import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 import { applyUnifiedDiffToText, parseUnifiedDiffFiles, type UnifiedDiffFile } from './unifiedDiff';
 import { applyPatchWithGit, getStripCandidates, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
@@ -312,6 +313,29 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         await config.update(key, value, vscode.ConfigurationTarget.Global);
     }
 
+    private async doesSourceDirectoryExist(sourceDir: string): Promise<boolean> {
+        const trimmed = (sourceDir ?? '').trim();
+        if (!trimmed) {
+            return false;
+        }
+
+        try {
+            // Local sessions are fastest via Node fs.
+            // Remote sessions must use VS Code's workspace FS provider.
+            if (vscode.env.remoteName === undefined) {
+                const stat = await fs.stat(trimmed);
+                return stat.isDirectory();
+            }
+
+            // For remote workspaces, map the absolute path into the remote FS provider.
+            const uri = this.getUriForDirectory(trimmed);
+            const stat = await vscode.workspace.fs.stat(uri);
+            return (stat.type & vscode.FileType.Directory) !== 0;
+        } catch {
+            return false;
+        }
+    }
+
     private async sendSettings() {
         if (!this._view) return;
 
@@ -467,6 +491,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
+                    if (!(await this.doesSourceDirectoryExist(sourceDir))) {
+                        vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+                        return;
+                    }
+
                     steps.next('Detect environment');
                     const isRemote = vscode.env.remoteName !== undefined;
                     const isRemoteLocal = await this.isRemoteLocalMachine();
@@ -570,6 +599,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
+                    if (!(await this.doesSourceDirectoryExist(sourceDir))) {
+                        vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+                        return;
+                    }
+
                     steps.next('Load patch content');
                     const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
 
@@ -627,6 +661,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     private async diffPatch(patchFile: string, sourceDir: string) {
         if (!patchFile) {
             vscode.window.showWarningMessage('Please select a patch file');
+            return;
+        }
+
+        if (!(await this.doesSourceDirectoryExist(sourceDir))) {
+            vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
             return;
         }
 
