@@ -1,14 +1,14 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 import { applyUnifiedDiffToText, parseUnifiedDiffFiles, type UnifiedDiffFile } from './unifiedDiff';
+import { applyPatchWithGit, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
 import {
-    getTempOutputLocation,
     getTempRootLocation,
     isRemoteSession,
     normalizeCwd,
-    quoteShellArgs,
     PATCHITUP_TMP_DIRNAME
 } from './commandPathUtils';
 import { detectIsRemoteLocalMachine, isLocalhostHostname, shouldUseVscodeLocalScheme } from './remoteSessionUtils';
@@ -105,124 +105,99 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     private async executeGitCommandResult(
         args: string[],
         cwd: string,
-        allowedExitCodes: number[] = [0]
+        allowedExitCodes: number[] = [0],
+        stdin?: string
     ): Promise<{ exitCode: number; output: string }> {
-        // Prefer the first workspace folder when available, but allow running without one
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-
         const remoteName = vscode.env.remoteName;
 
-        // Normalize the cwd based on session type. Tasks execute in the workspace environment.
-        // In remote Linux sessions we need forward slashes even if the UI host is Windows.
+        // Normalize the cwd based on session type. In remote Linux sessions we need forward slashes
+        // even if the UI host is Windows.
         const normalizedCwd = normalizeCwd(cwd, remoteName);
-        const shellCwd = normalizedCwd;
 
-        // Write command output to a temp file (avoids requiring write access to cwd)
-        const tempLocation = getTempOutputLocation({
-            remoteName,
-            workspaceRootPosixPath: workspaceFolder?.uri.path,
-            osTmpDir: os.tmpdir()
-        });
-
-        let tempUri: vscode.Uri;
-        if (tempLocation.kind === 'workspace') {
-            if (!workspaceFolder) {
-                throw new Error('No workspace folder open');
-            }
-            const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
-            await vscode.workspace.fs.createDirectory(tmpDirUri);
-            tempUri = vscode.Uri.joinPath(workspaceFolder.uri, ...tempLocation.relativeSegments);
-        } else {
-            tempUri = vscode.Uri.file(tempLocation.absolutePath);
-        }
-
-        const tempOutputPath = tempLocation.shellPath;
+        // IMPORTANT: Use child_process instead of VS Code Tasks to avoid opening terminals / console windows.
+        // In a remote session, the extension host runs remotely, so this still executes in the right place.
+        const timeoutMs = 30000;
+        const maxOutputBytes = 20 * 1024 * 1024;
 
         this.logger.info('executeGitCommand', {
             cwd,
             normalizedCwd,
-            shellCwd,
             remoteName,
-            tempOutputPath,
-            tempUri: tempUri.toString(),
-            hasWorkspaceFolder: !!workspaceFolder
+            args
         });
 
-        try {
-            // Execute git command with output redirection
-            const quotedArgs = quoteShellArgs(args);
-            const shellCmd = `git ${quotedArgs} > "${tempOutputPath}" 2>&1`;
-            this.logger.info('executeGitCommand.shell', { shellCmd });
-
-            const execution = new vscode.ShellExecution(shellCmd, { cwd: shellCwd });
-            const task = new vscode.Task(
-                { type: 'shell' },
-                workspaceFolder ?? vscode.TaskScope.Global,
-                'Git Command',
-                'patchitup',
-                execution
-            );
-
-            const exitCode = await new Promise<number>((resolve, reject) => {
-                vscode.tasks.executeTask(task).then(taskExecution => {
-                    const disposable = vscode.tasks.onDidEndTaskProcess(e => {
-                        if (e.execution === taskExecution) {
-                            disposable.dispose();
-                            resolve(e.exitCode ?? -1);
-                        }
-                    });
-
-                    setTimeout(() => {
-                        disposable.dispose();
-                        reject(new Error('Command timeout'));
-                    }, 30000);
-                });
+        const result = await new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
+            const child = spawn('git', args, {
+                cwd: normalizedCwd,
+                windowsHide: true,
+                stdio: [stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe']
             });
 
-            // Read the output file using workspace fs API
-            const outputBytes = await vscode.workspace.fs.readFile(tempUri);
-            const decoder = new TextDecoder();
-            const output = decoder.decode(outputBytes);
-
-            // Clean up
-            await vscode.workspace.fs.delete(tempUri);
-
-            if (!allowedExitCodes.includes(exitCode)) {
-                const trimmed = output.trim();
-                this.logger.error('executeGitCommand non-allowed exit code', { exitCode, output: trimmed });
-                throw new Error(`Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`);
+            if (stdin !== undefined) {
+                try {
+                    child.stdin?.write(stdin, 'utf8');
+                    child.stdin?.end();
+                } catch (e) {
+                    try {
+                        child.kill();
+                    } catch {}
+                    reject(e);
+                    return;
+                }
             }
 
-            if (output.trim()) {
-                this.logger.info('executeGitCommand.output', { exitCode, output: output.trim() });
-            } else {
-                this.logger.info('executeGitCommand.output', { exitCode, output: '' });
-            }
+            const chunks: Buffer[] = [];
+            let total = 0;
 
-            return { exitCode, output };
-        } catch (error) {
-            // Try to read the output before cleaning up to get error details
-            let errorOutput = '';
-            try {
-                const outputBytes = await vscode.workspace.fs.readFile(tempUri);
-                const decoder = new TextDecoder();
-                errorOutput = decoder.decode(outputBytes);
-            } catch {}
+            const onData = (data: Buffer) => {
+                chunks.push(data);
+                total += data.length;
+                if (total > maxOutputBytes) {
+                    try {
+                        child.kill();
+                    } catch {}
+                    reject(new Error(`Git output exceeded ${maxOutputBytes} bytes`));
+                }
+            };
 
-            // Try to clean up temp file
-            try {
-                await vscode.workspace.fs.delete(tempUri);
-            } catch {}
-            
-            // Include the git error output in the error message if available
-            if (errorOutput.trim()) {
-                const originalMessage = error instanceof Error ? error.message : String(error);
-                this.logger.error('executeGitCommand failed', { message: originalMessage, gitOutput: errorOutput.trim() });
-                throw new Error(`${originalMessage}\nGit output: ${errorOutput.trim()}`);
-            }
-            this.logger.error('executeGitCommand failed', { error: error instanceof Error ? error.message : String(error) });
-            throw error;
-        }
+            child.stdout?.on('data', onData);
+            child.stderr?.on('data', onData);
+
+            const timer = setTimeout(() => {
+                try {
+                    child.kill();
+                } catch {}
+                reject(new Error('Command timeout'));
+            }, timeoutMs);
+
+            child.on('error', (e) => {
+                clearTimeout(timer);
+                reject(e);
+            });
+
+            child.on('close', (code) => {
+                clearTimeout(timer);
+                const combined = Buffer.concat(chunks).toString('utf8');
+
+                const exitCode = code ?? -1;
+                if (!allowedExitCodes.includes(exitCode)) {
+                    const trimmed = combined.trim();
+                    this.logger.error('executeGitCommand non-allowed exit code', { exitCode, output: trimmed });
+                    reject(new Error(`Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`));
+                    return;
+                }
+
+                if (combined.trim()) {
+                    this.logger.info('executeGitCommand.output', { exitCode, output: combined.trim() });
+                } else {
+                    this.logger.info('executeGitCommand.output', { exitCode, output: '' });
+                }
+
+                resolve({ exitCode, output: combined });
+            });
+        });
+
+        return result;
     }
 
     public resolveWebviewView(
@@ -515,92 +490,34 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
             const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
 
-            const guessPreferredStripLevel = (content: string): number => {
-                const firstDiffLine = content.split(/\r?\n/).find(l => l.startsWith('diff --git '));
-                if (!firstDiffLine) {
-                    return 1;
-                }
-                const parts = firstDiffLine.split(' ');
-                const left = parts[2] ?? '';
-                const right = parts[3] ?? '';
-                if (left.startsWith('a/') || right.startsWith('b/')) {
-                    return 1;
-                }
-                return 0;
-            };
-
-            // Write patch to temp file in workspace and apply it using git command
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            if (!workspaceFolder) {
-                throw new Error('No workspace folder open');
-            }
-
-            // Determine if we're in a remote environment
-            const isRemote = !!workspaceFolder.uri.authority;
-            
-            // Normalize sourceDir based on environment
-            const normalizedSourceDir = isRemote 
-                ? sourceDir.trim().replace(/\\/g, '/')
-                : sourceDir.trim();
-            
-            // Get the workspace path in the appropriate format
-            const workspacePath = isRemote ? workspaceFolder.uri.path : workspaceFolder.uri.fsPath;
-
-            // Construct URI for temp patch file in the workspace
-            let cwdUri: vscode.Uri;
-            if (normalizedSourceDir === workspacePath || normalizedSourceDir === workspaceFolder.uri.path || normalizedSourceDir === workspaceFolder.uri.fsPath) {
-                cwdUri = workspaceFolder.uri;
-            } else {
-                if (isRemote) {
-                    // Remote: ensure path starts with / and uses forward slashes
-                    let remotePath = normalizedSourceDir;
-                    if (!remotePath.startsWith('/')) {
-                        remotePath = '/' + remotePath;
-                    }
-                    cwdUri = workspaceFolder.uri.with({ path: remotePath });
-                } else {
-                    // Local: use the path as-is
-                    cwdUri = vscode.Uri.file(normalizedSourceDir);
-                }
-            }
-
-            const tempPatchFileName = '.patchitup-apply-temp.patch';
-            const tempPatchUri = vscode.Uri.joinPath(cwdUri, tempPatchFileName);
-            const encoder = new TextEncoder();
-            await vscode.workspace.fs.writeFile(tempPatchUri, encoder.encode(patchContent));
-            this.logger.info('applyPatch: wrote temp patch file', { tempPatchUri: tempPatchUri.toString() });
-
             try {
                 const preferredStrip = guessPreferredStripLevel(patchContent);
-                const stripCandidates = Array.from(new Set([preferredStrip, 0, 1, 2, 3]));
 
-                const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
+                const selection = await selectStripLevelForPatch({
+                    patchContent,
+                    cwd: sourceDir,
+                    preferredStrip,
+                    runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
+                        this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                });
 
-                let selectedStrip = preferredStrip;
-                for (const strip of stripCandidates) {
-                    try {
-                        const check = await this.executeGitCommandResult(
-                            ['apply', `-p${strip}`, '--check', '--whitespace=nowarn', tempPatchFileName],
-                            sourceDir,
-                            [0, 1]
-                        );
-                        const stat = await this.executeGitCommandResult(['apply', `-p${strip}`, '--stat', tempPatchFileName], sourceDir, [0, 1]);
-                        const statOut = stat.output.trim();
-                        if (check.exitCode === 0 && stat.exitCode === 0 && statOut && statOut !== '0 files changed') {
-                            selectedStrip = strip;
-                            break;
-                        }
-                    } catch {
-                        // ignore and try next candidate
-                    }
-                }
+                this.logger.info('applyPatch: selected git apply strip level', {
+                    selectedStrip: selection.selectedStrip,
+                    stripCandidates: selection.stripCandidates
+                });
 
-                this.logger.info('applyPatch: selected git apply strip level', { selectedStrip, stripCandidates });
+                const result = await applyPatchWithGit({
+                    patchContent,
+                    cwd: sourceDir,
+                    stripLevel: selection.selectedStrip,
+                    runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
+                        this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                });
 
-                // Apply using git command via Task API (use relative filename)
-                const result = await this.executeGitCommandResult(['apply', `-p${selectedStrip}`, tempPatchFileName], sourceDir, [0, 1]);
                 const trimmed = result.output.trim();
                 this.logger.info('applyPatch: git apply output', { exitCode: result.exitCode, output: trimmed });
+
+                const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
                 if (result.exitCode !== 0 || isSkippedOutput(trimmed)) {
                     throw new Error(trimmed || `git apply returned exit code ${result.exitCode}`);
                 }
@@ -609,13 +526,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             } catch (error: any) {
                 this.logger.error('applyPatch failed', { error: error?.message ?? String(error) });
                 vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
-            } finally {
-                // Clean up temp file
-                try {
-                    await vscode.workspace.fs.delete(tempPatchUri);
-                } catch {
-                    // Ignore cleanup errors
-                }
             }
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
