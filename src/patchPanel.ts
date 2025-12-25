@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
+import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
@@ -129,70 +130,39 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     // Execute git command and get output via temp file
-    private async executeGitCommand(args: string[], cwd: string): Promise<string> {
-        // Get any workspace folder (or use the first one if available)
-        let workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        
-        if (!workspaceFolder) {
-            throw new Error('No workspace folder open');
-        }
+    private async executeGitCommand(args: string[], cwd: string, allowedExitCodes: number[] = [0]): Promise<string> {
+        // Prefer the first workspace folder when available, but allow running without one
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 
-        // Create temp file for output
-        const tempFileName = `.patchitup-temp-${Date.now()}.txt`;
-        
-        // Determine if we're in a remote environment (Codespaces, SSH, WSL, etc.)
-        // Remote URIs have an authority component, local file:// URIs don't
-        const isRemote = !!workspaceFolder.uri.authority;
-        
-        // If cwd matches the workspace path, use it directly; otherwise construct the URI
-        // This handles cases where cwd might be the full path like /workspaces/odsp-web
-        let cwdUri: vscode.Uri;
-        let shellCwd: string;
-        
+        // Remote inference: if we're running on a remote extension host, treat paths as posix.
+        // This keeps behavior consistent even when no folder is opened.
+        const isRemote = vscode.env.remoteName !== undefined;
+
         // Normalize the cwd based on environment
-        // - Remote (Linux-based): use forward slashes
-        // - Local Windows: preserve backslashes
-        const normalizedCwd = isRemote 
-            ? cwd.trim().replace(/\\/g, '/')
-            : cwd.trim();
-        
-        // Get the workspace path in the appropriate format
-        // - Remote: use uri.path (always forward slashes)
-        // - Local: use fsPath (OS-native separators)
-        const workspacePath = isRemote ? workspaceFolder.uri.path : workspaceFolder.uri.fsPath;
-        
-        if (normalizedCwd === workspacePath || normalizedCwd === workspaceFolder.uri.path || normalizedCwd === workspaceFolder.uri.fsPath) {
-            // Direct match with workspace
-            cwdUri = workspaceFolder.uri;
-            shellCwd = workspacePath;
-        } else {
-            // Custom path - construct URI appropriately
-            if (isRemote) {
-                // Remote: ensure path starts with / and uses forward slashes
-                let remotePath = normalizedCwd;
-                if (!remotePath.startsWith('/')) {
-                    remotePath = '/' + remotePath;
-                }
-                cwdUri = workspaceFolder.uri.with({ path: remotePath });
-                shellCwd = remotePath;
-            } else {
-                // Local: use the path as-is (with native separators)
-                cwdUri = vscode.Uri.file(normalizedCwd);
-                shellCwd = normalizedCwd;
-            }
-        }
-            
-        const tempUri = vscode.Uri.joinPath(cwdUri, tempFileName);
-        console.log('executeGitCommand:', { cwd, normalizedCwd, shellCwd, workspacePath, isRemote, cwdUri: cwdUri.toString(), tempUri: tempUri.toString() });
+        const normalizedCwd = isRemote ? cwd.trim().replace(/\\/g, '/') : cwd.trim();
+        const shellCwd = normalizedCwd;
+
+        // Write command output to a temp file (avoids requiring write access to cwd)
+        const tempOutputPath = path.join(os.tmpdir(), `.patchitup-temp-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`);
+        const tempUri = vscode.Uri.file(tempOutputPath);
+
+        console.log('executeGitCommand:', { cwd, normalizedCwd, shellCwd, isRemote, tempOutputPath, hasWorkspaceFolder: !!workspaceFolder });
 
         try {
-            // Execute git command with output redirection (use relative path)
-            const shellCmd = `git ${args.join(' ')} > "${tempFileName}" 2>&1`;
-            
+            // Execute git command with output redirection
+            const quotedArgs = args.map(a => {
+                // Basic cross-shell quoting for args containing whitespace or quotes
+                if (!/[\s"]/g.test(a)) {
+                    return a;
+                }
+                return `"${a.replace(/"/g, '\\"')}"`;
+            }).join(' ');
+            const shellCmd = `git ${quotedArgs} > "${tempOutputPath}" 2>&1`;
+
             const execution = new vscode.ShellExecution(shellCmd, { cwd: shellCwd });
             const task = new vscode.Task(
                 { type: 'shell' },
-                workspaceFolder,
+                workspaceFolder ?? vscode.TaskScope.Global,
                 'Git Command',
                 'patchitup',
                 execution
@@ -203,7 +173,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     const disposable = vscode.tasks.onDidEndTaskProcess(e => {
                         if (e.execution === taskExecution) {
                             disposable.dispose();
-                            if (e.exitCode === 0) {
+                            if (allowedExitCodes.includes(e.exitCode ?? -1)) {
                                 resolve();
                             } else {
                                 reject(new Error(`Git command failed with exit code ${e.exitCode}`));
@@ -272,6 +242,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     break;
                 case 'applyPatch':
                     await this.applyPatch(data.patchFile, data.sourceDir);
+                    break;
+                case 'diffPatch':
+                    await this.diffPatch(data.patchFile, data.sourceDir);
                     break;
                 case 'refreshPatches':
                     await this.refreshPatchList(data.destPath);
@@ -532,40 +505,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            const config = vscode.workspace.getConfiguration('patchitup');
-            const destPath = config.get<string>('destinationPath', '');
-
-            if (!destPath) {
-                vscode.window.showErrorMessage('Destination path not configured');
-                return;
-            }
-
-            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
-            console.log('applyPatch:', { patchFile, sourceDir, destPath, useVscodeLocal });
-
-            // Read the patch file from local machine using appropriate scheme
-            let patchContent: string;
-            const decoder = new TextDecoder();
-
-            try {
-                const patchUri = await this.getLocalFileUri(path.join(destPath, patchFile));
-                console.log('Attempting to read patch from:', patchUri.toString());
-                const patchBytes = await vscode.workspace.fs.readFile(patchUri);
-                patchContent = decoder.decode(patchBytes);
-                console.log('Successfully read patch');
-            } catch (error: any) {
-                // If vscode-local fails and we were using it, try regular file scheme as fallback
-                console.log('Read failed, error:', error, 'code:', error.code);
-                if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
-                    console.log('Fallback: trying regular file scheme for read');
-                    const patchUri = vscode.Uri.file(path.join(destPath, patchFile));
-                    const patchBytes = await vscode.workspace.fs.readFile(patchUri);
-                    patchContent = decoder.decode(patchBytes);
-                    console.log('Successfully read patch with file scheme');
-                } else {
-                    throw error;
-                }
-            }
+            const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
 
             // Write patch to temp file in workspace and apply it using git command
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -628,6 +568,204 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             vscode.window.showErrorMessage(`Error applying patch: ${errorMessage}`);
         }
     }
+
+    private async diffPatch(patchFile: string, sourceDir: string) {
+        try {
+            if (!patchFile) {
+                vscode.window.showWarningMessage('Please select a patch file');
+                return;
+            }
+
+            const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
+            const fileEdits = parseGitPatchFileEdits(patchContent);
+            if (fileEdits.length === 0) {
+                vscode.window.showWarningMessage('Selected patch contains no file diffs');
+                return;
+            }
+
+            const isRemote = vscode.env.remoteName !== undefined;
+            const normalizedSourceDir = isRemote ? sourceDir.trim().replace(/\\/g, '/') : sourceDir.trim();
+
+            // A temp folder on the extension host: %TEMP% on Windows, /tmp on Linux.
+            const tempRoot = path.join(os.tmpdir(), `patchitup-diff-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+            const originalRootUri = vscode.Uri.file(path.join(tempRoot, 'original'));
+            const patchedRootUri = vscode.Uri.file(path.join(tempRoot, 'patched'));
+            await vscode.workspace.fs.createDirectory(originalRootUri);
+            await vscode.workspace.fs.createDirectory(patchedRootUri);
+
+            const encoder = new TextEncoder();
+            const createEmpty = async (uri: vscode.Uri) => {
+                await this.ensureParentDirectory(uri);
+                await vscode.workspace.fs.writeFile(uri, encoder.encode(''));
+            };
+
+            const sourceRootUri = this.getUriForDirectory(normalizedSourceDir);
+
+            const readBaseBytes = async (edit: PatchFileEdit): Promise<Uint8Array> => {
+                // Prefer blob IDs embedded in the patch (most accurate for old patches)
+                if (edit.oldBlob && edit.oldBlob !== '0000000' && !/^0+$/.test(edit.oldBlob)) {
+                    try {
+                        const blobText = await this.executeGitCommand(['cat-file', '-p', edit.oldBlob], normalizedSourceDir);
+                        return encoder.encode(blobText);
+                    } catch {
+                        // Blob not present in this repo/clone/branch; fall back below.
+                    }
+                }
+
+                // Fallback: use HEAD version when blob not present (e.g., some patch formats)
+                try {
+                    const showText = await this.executeGitCommand(['show', `HEAD:${edit.oldPath}`], normalizedSourceDir);
+                    return encoder.encode(showText);
+                } catch {
+                    // Final fallback: read from working tree if present
+                    try {
+                        const workingTreeUri = this.joinUriPath(sourceRootUri, edit.oldPath);
+                        return await vscode.workspace.fs.readFile(workingTreeUri);
+                    } catch {
+                        return encoder.encode('');
+                    }
+                }
+            };
+
+            // Materialize pre-apply files into original/ and patched/ using the patch's base revision.
+            for (const edit of fileEdits) {
+                const originalRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
+                const patchedRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+
+                const originalFileUri = this.joinUriPath(originalRootUri, originalRelPath);
+                const patchedFileUri = this.joinUriPath(patchedRootUri, patchedRelPath);
+
+                if (edit.status === 'added') {
+                    await createEmpty(originalFileUri);
+                    // patched file will be created by git apply, but make sure the directory exists
+                    await this.ensureParentDirectory(patchedFileUri);
+                    continue;
+                }
+
+                const contentBytes = await readBaseBytes(edit);
+
+                await this.ensureParentDirectory(originalFileUri);
+                await vscode.workspace.fs.writeFile(originalFileUri, contentBytes);
+
+                // patched tree starts as a copy of the base content at the *oldPath* location,
+                // so renames/deletes can apply cleanly.
+                const patchedBaseUri = this.joinUriPath(patchedRootUri, edit.oldPath);
+                await this.ensureParentDirectory(patchedBaseUri);
+                await vscode.workspace.fs.writeFile(patchedBaseUri, contentBytes);
+
+                // Ensure directories for the final path exist (e.g., rename to new folder).
+                await this.ensureParentDirectory(patchedFileUri);
+            }
+
+            // Apply patch inside patched/.
+            const tempPatchFileName = '.patchitup-diff-temp.patch';
+            const tempPatchUri = vscode.Uri.joinPath(patchedRootUri, tempPatchFileName);
+            await vscode.workspace.fs.writeFile(tempPatchUri, encoder.encode(patchContent));
+
+            try {
+                await this.executeGitCommand(['apply', tempPatchFileName], patchedRootUri.fsPath);
+            } catch (error: any) {
+                // Try a best-effort preview by allowing rejects so we can still show partial diffs.
+                try {
+                    await this.executeGitCommand(['apply', '--reject', '--whitespace=nowarn', tempPatchFileName], patchedRootUri.fsPath, [0, 1]);
+                    vscode.window.showWarningMessage('Patch did not apply cleanly; showing best-effort diff preview with rejects.');
+                } catch {
+                    vscode.window.showErrorMessage(`Failed to apply patch for diff preview: ${error.message || error}`);
+                    return;
+                }
+            } finally {
+                try {
+                    await vscode.workspace.fs.delete(tempPatchUri);
+                } catch {
+                    // Ignore cleanup errors
+                }
+            }
+
+            // Open diffs for all impacted files.
+            for (const edit of fileEdits) {
+                const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
+                const rightRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+
+                const leftUri = this.joinUriPath(originalRootUri, leftRelPath);
+                const rightUri = this.joinUriPath(patchedRootUri, rightRelPath);
+
+                // If a file was deleted, the patched version may not exist anymore.
+                // Create an empty placeholder so the diff editor can open.
+                if (edit.status === 'deleted') {
+                    try {
+                        await vscode.workspace.fs.stat(rightUri);
+                    } catch {
+                        await createEmpty(rightUri);
+                    }
+                }
+
+                const title = `Diff: ${rightRelPath} (${patchFile})`;
+                await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, {
+                    preview: false,
+                    preserveFocus: true
+                });
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Error diffing patch: ${errorMessage}`);
+        }
+    }
+
+    private async readPatchFromConfiguredDestination(patchFile: string): Promise<string> {
+        const config = vscode.workspace.getConfiguration('patchitup');
+        const destPath = config.get<string>('destinationPath', '');
+        if (!destPath) {
+            vscode.window.showErrorMessage('Destination path not configured');
+            throw new Error('Destination path not configured');
+        }
+
+        const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+        console.log('readPatchFromConfiguredDestination:', { patchFile, destPath, useVscodeLocal });
+
+        const decoder = new TextDecoder();
+        try {
+            const patchUri = await this.getLocalFileUri(path.join(destPath, patchFile));
+            const patchBytes = await vscode.workspace.fs.readFile(patchUri);
+            return decoder.decode(patchBytes);
+        } catch (error: any) {
+            // If vscode-local fails and we were using it, try regular file scheme as fallback
+            if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
+                const patchUri = vscode.Uri.file(path.join(destPath, patchFile));
+                const patchBytes = await vscode.workspace.fs.readFile(patchUri);
+                return decoder.decode(patchBytes);
+            }
+            throw error;
+        }
+    }
+
+    private getUriForDirectory(dirPath: string): vscode.Uri {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            return vscode.Uri.file(dirPath);
+        }
+
+        const isRemote = !!workspaceFolder.uri.authority;
+        if (!isRemote) {
+            return vscode.Uri.file(dirPath);
+        }
+
+        let remotePath = dirPath.replace(/\\/g, '/');
+        if (!remotePath.startsWith('/')) {
+            remotePath = '/' + remotePath;
+        }
+        return workspaceFolder.uri.with({ path: remotePath });
+    }
+
+    private joinUriPath(base: vscode.Uri, relativePath: string): vscode.Uri {
+        const parts = relativePath.split('/').filter(Boolean);
+        return vscode.Uri.joinPath(base, ...parts);
+    }
+
+    private async ensureParentDirectory(fileUri: vscode.Uri): Promise<void> {
+        const parent = vscode.Uri.joinPath(fileUri, '..');
+        await vscode.workspace.fs.createDirectory(parent);
+    }
+
 
     private _getHtmlForWebview(webview: vscode.Webview) {
         // Use nonce for security and cache busting
@@ -787,6 +925,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
     <div class="button-container button-container-bottom">
         <button id="applyPatchBtn" class="secondary-button" disabled>Apply Selected Patch</button>
+        <button id="diffPatchBtn" class="secondary-button" disabled>Diff Selected Patch</button>
     </div>
 
     <script nonce="${nonce}">
@@ -859,16 +998,33 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             });
         });
 
+        // Diff patch button
+        document.getElementById('diffPatchBtn').addEventListener('click', () => {
+            if (!selectedPatch) {
+                return;
+            }
+            const sourceDir = document.getElementById('sourceDir').value;
+            
+            vscode.postMessage({
+                type: 'diffPatch',
+                patchFile: selectedPatch,
+                sourceDir
+            });
+        });
+
         // Update patch list
         function updatePatchList(patches) {
             const patchList = document.getElementById('patchList');
             const applyBtn = document.getElementById('applyPatchBtn');
+            const diffBtn = document.getElementById('diffPatchBtn');
             
             if (!patches || patches.length === 0) {
                 patchList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">No patches found</div>';
                 selectedPatch = null;
                 applyBtn.disabled = true;
                 applyBtn.classList.add('secondary-button');
+                diffBtn.disabled = true;
+                diffBtn.classList.add('secondary-button');
                 return;
             }
 
@@ -883,6 +1039,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     selectedPatch = patch;
                     applyBtn.disabled = false;
                     applyBtn.classList.remove('secondary-button');
+                    diffBtn.disabled = false;
+                    diffBtn.classList.remove('secondary-button');
                 });
                 patchList.appendChild(item);
             });
