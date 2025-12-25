@@ -325,4 +325,62 @@ describe('unified diff parsing + apply', () => {
         assert.strictEqual(result.rejectedHunks, 0);
         assert.strictEqual(result.text, ['hello', 'world'].join('\n'));
     });
+
+    it('preserves CRLF line endings from the original text', () => {
+        const patch = [
+            'diff --git a/foo.txt b/foo.txt',
+            '--- a/foo.txt',
+            '+++ b/foo.txt',
+            '@@ -1,2 +1,2 @@',
+            ' one',
+            '-two',
+            '+TWO'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        const original = ['one', 'two', ''].join('\r\n');
+        const result = applyUnifiedDiffToText(original, files[0]);
+
+        assert.strictEqual(result.rejectedHunks, 0);
+        assert.strictEqual(result.text, ['one', 'TWO', ''].join('\r\n'));
+    });
+
+    it('preserves the absence of a trailing newline', () => {
+        const patch = [
+            'diff --git a/foo.txt b/foo.txt',
+            '--- a/foo.txt',
+            '+++ b/foo.txt',
+            '@@ -1,2 +1,2 @@',
+            ' one',
+            '-two',
+            '+TWO'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        const original = ['one', 'two'].join('\n');
+        const result = applyUnifiedDiffToText(original, files[0]);
+
+        assert.strictEqual(result.rejectedHunks, 0);
+        assert.strictEqual(result.text, ['one', 'TWO'].join('\n'));
+        assert.ok(!result.text.endsWith('\n'));
+    });
+
+    it('parses short hunk headers without explicit counts', () => {
+        const patch = [
+            'diff --git a/foo.txt b/foo.txt',
+            '--- a/foo.txt',
+            '+++ b/foo.txt',
+            '@@ -2 +2 @@',
+            '-b',
+            '+B'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        assert.strictEqual(files.length, 1);
+        assert.strictEqual(files[0].hunks.length, 1);
+        assert.strictEqual(files[0].hunks[0].oldStart, 2);
+        assert.strictEqual(files[0].hunks[0].oldLines, 1);
+        assert.strictEqual(files[0].hunks[0].newStart, 2);
+        assert.strictEqual(files[0].hunks[0].newLines, 1);
+    });
 });
