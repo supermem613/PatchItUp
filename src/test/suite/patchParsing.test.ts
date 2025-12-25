@@ -17,8 +17,14 @@ describe('parseGitPatchFileEdits', () => {
         const edits = parseGitPatchFileEdits(patch);
         assert.strictEqual(edits.length, 1);
         assert.strictEqual(edits[0].status, 'modified');
-        assert.strictEqual(edits[0].oldPath, 'odsp-common/copilot/common/src/utilities/KillSwitches.ts');
-        assert.strictEqual(edits[0].newPath, 'odsp-common/copilot/common/src/utilities/KillSwitches.ts');
+        assert.strictEqual(
+            edits[0].oldPath,
+            'odsp-common/copilot/common/src/utilities/KillSwitches.ts'
+        );
+        assert.strictEqual(
+            edits[0].newPath,
+            'odsp-common/copilot/common/src/utilities/KillSwitches.ts'
+        );
         assert.strictEqual(edits[0].oldBlob, '481b05b2d065');
         assert.strictEqual(edits[0].newBlob, '444f412501c4');
     });
@@ -37,8 +43,14 @@ describe('parseGitPatchFileEdits', () => {
         const edits = parseGitPatchFileEdits(patch);
         assert.strictEqual(edits.length, 1);
         assert.strictEqual(edits[0].status, 'added');
-        assert.strictEqual(edits[0].oldPath, 'odsp-common/embed-host/contracts/src/chatodsp/AgentSelectionOverride.ts');
-        assert.strictEqual(edits[0].newPath, 'odsp-common/embed-host/contracts/src/chatodsp/AgentSelectionOverride.ts');
+        assert.strictEqual(
+            edits[0].oldPath,
+            'odsp-common/embed-host/contracts/src/chatodsp/AgentSelectionOverride.ts'
+        );
+        assert.strictEqual(
+            edits[0].newPath,
+            'odsp-common/embed-host/contracts/src/chatodsp/AgentSelectionOverride.ts'
+        );
         assert.strictEqual(edits[0].oldBlob, '000000000000');
         assert.strictEqual(edits[0].newBlob, '0fc198303625');
     });
@@ -184,7 +196,10 @@ describe('unified diff parsing + apply', () => {
 
         assert.strictEqual(result.rejectedHunks, 0);
         assert.strictEqual(result.appliedHunks, 2);
-        assert.strictEqual(result.text, ['one', 'TWO', 'three', 'four', 'FIVE', 'six', ''].join('\n'));
+        assert.strictEqual(
+            result.text,
+            ['one', 'TWO', 'three', 'four', 'FIVE', 'six', ''].join('\n')
+        );
     });
 
     it('applies pure insertion hunks', () => {

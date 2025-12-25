@@ -1,5 +1,11 @@
 import * as assert from 'assert';
-import { applyPatchWithGit, getStripCandidates, guessPreferredStripLevel, selectStripLevelForPatch, type GitRunner } from '../../gitApply';
+import {
+    applyPatchWithGit,
+    getStripCandidates,
+    guessPreferredStripLevel,
+    selectStripLevelForPatch,
+    type GitRunner
+} from '../../gitApply';
 
 describe('gitApply helpers', () => {
     it('guessPreferredStripLevel defaults to 1 when diff header missing', () => {
@@ -32,7 +38,7 @@ describe('gitApply helpers', () => {
         const runGit: GitRunner = async ({ args, stdin }) => {
             calls.push({ args, stdin });
             // Make the first candidate fail, second succeed.
-            const hasP1 = args.some(a => a === '-p1');
+            const hasP1 = args.some((a) => a === '-p1');
             const isCheck = args.includes('--check');
             const isStat = args.includes('--stat');
 
@@ -74,8 +80,8 @@ describe('gitApply helpers', () => {
 
         const runGit: GitRunner = async ({ args, stdin }) => {
             calls.push({ args, stdin });
-            const hasP1 = args.some(a => a === '-p1');
-            const hasP0 = args.some(a => a === '-p0');
+            const hasP1 = args.some((a) => a === '-p1');
+            const hasP0 = args.some((a) => a === '-p0');
             const isCheck = args.includes('--check');
             const isStat = args.includes('--stat');
 

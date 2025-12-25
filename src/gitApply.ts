@@ -8,7 +8,7 @@ export type GitRunner = (params: {
 }) => Promise<GitRunResult>;
 
 export function guessPreferredStripLevel(patchContent: string): number {
-    const firstDiffLine = patchContent.split(/\r?\n/).find(l => l.startsWith('diff --git '));
+    const firstDiffLine = patchContent.split(/\r?\n/).find((l) => l.startsWith('diff --git '));
     if (!firstDiffLine) {
         return 1;
     }
@@ -61,7 +61,12 @@ export async function selectStripLevelForPatch(params: {
             });
 
             const statOut = stat.output.trim();
-            if (check.exitCode === 0 && stat.exitCode === 0 && statOut && statOut !== '0 files changed') {
+            if (
+                check.exitCode === 0 &&
+                stat.exitCode === 0 &&
+                statOut &&
+                statOut !== '0 files changed'
+            ) {
                 return { selectedStrip: strip, stripCandidates };
             }
         } catch {

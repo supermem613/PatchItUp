@@ -21,16 +21,16 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from u
 
 ![PatchItUp Sidebar](images/sidebar.png)
 
-*The PatchItUp panel showing configuration fields and available patches, allowing for creating and applying patches.*
+_The PatchItUp panel showing configuration fields and available patches, allowing for creating and applying patches._
 
 ## 🚀 Quick Start
 
 1. **Install the extension** in VS Code
 2. **Open the PatchItUp panel** - Click the diff icon in the activity bar (left sidebar)
 3. **Configure settings:**
-   - **Source Directory**: Your git repository path (e.g., `/workspaces/your-project` or `C:\Projects\my-app`)
-   - **Project Name**: `my-project` (used in patch filenames)
-   - **Destination Path**: Where to save patches (e.g., `C:\Users\YourName\patches`)
+    - **Source Directory**: Your git repository path (e.g., `/workspaces/your-project` or `C:\Projects\my-app`)
+    - **Project Name**: `my-project` (used in patch filenames)
+    - **Destination Path**: Where to save patches (e.g., `C:\Users\YourName\patches`)
 4. **Make changes** in your repository
 5. **Click "Create Patch"** - Patch is saved to your destination path
 6. **Apply patches** - Select a patch from the list and click "Apply Selected Patch"
@@ -59,6 +59,7 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from u
 4. PatchItUp creates a temporary working copy of the affected files, applies the patch there, and opens diff editors for the changed files
 
 Notes:
+
 - Temp location is the extension-host temp directory (`%TEMP%` on Windows, `/tmp` on Linux remotes).
 - This does **not** modify your working directory.
 - If the patch was created from a different repo/branch/history than your current `Source Directory`, PatchItUp may fall back to a best-effort preview (some hunks may be rejected).
@@ -70,6 +71,7 @@ Notes:
 ### Command Palette
 
 You can also use the command palette (Ctrl+Shift+P):
+
 - `PatchItUp: Create and Save Patch`
 - `PatchItUp: Open Panel`
 
@@ -78,19 +80,22 @@ You can also use the command palette (Ctrl+Shift+P):
 Configure the extension in VS Code settings (File > Preferences > Settings):
 
 ### `patchitup.sourceDirectory`
+
 - **Description**: Git repository directory to create patches from
 - **Default**: `/tmp`
 - **Examples**:
-  - Codespace: `/workspaces/my-project`
-  - Windows: `C:\Projects\my-project`
-  - WSL/Linux: `/home/user/projects/my-project`
+    - Codespace: `/workspaces/my-project`
+    - Windows: `C:\Projects\my-project`
+    - WSL/Linux: `/home/user/projects/my-project`
 
 ### `patchitup.projectName`
+
 - **Description**: Project name prefix for patch files
 - **Default**: `project`
 - **Example**: `my-app`
 
 ### `patchitup.destinationPath`
+
 - **Description**: Local path on host machine to save patches
 - **Default**: `` (empty - must be configured)
 - **Windows Example**: `C:\Users\YourName\patches`
@@ -131,11 +136,13 @@ Configure the extension in VS Code settings (File > Preferences > Settings):
 ## 📝 Patch File Format
 
 Patch files use the standard git patch format and are named:
+
 ```text
 {projectName}_{YYYYMMDDHHMMSS}.patch
 ```
 
 Example: `tmp_20251126143052.patch`
+
 - `tmp`: Project name
 - `20251126`: Date (November 26, 2025)
 - `143052`: Time (14:30:52)
@@ -144,20 +151,24 @@ Example: `tmp_20251126143052.patch`
 ## 🐛 Troubleshooting
 
 ### "Source directory does not exist"
+
 - Click "Use Current Workspace" to automatically set the directory
 - Or manually configure `patchitup.sourceDirectory` in settings
 
 ### "Please configure the destination path"
+
 - Set `patchitup.destinationPath` to a valid path
 - For remote environments (Codespaces, SSH), this should be a path on your local machine
 - For local development, this can be any accessible directory
 - Make sure the path exists or the extension will create it
 
 ### "No changes to create a patch from"
+
 - Make sure you have uncommitted changes in your repository
 - Changes must be staged or modified (untracked files need to be added first)
 
 ### Patches not appearing in list
+
 - Check that the destination path is correct
 - Reload the panel or refresh by changing the destination path
 

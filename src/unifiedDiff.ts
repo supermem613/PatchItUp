@@ -135,7 +135,7 @@ const joinText = ({ lines, eol, endsWithNewline }: SplitText): string => {
 };
 
 const buildExpectedSourceLines = (hunk: UnifiedDiffHunk): string[] =>
-    hunk.lines.filter(l => l.kind !== 'add').map(l => l.text);
+    hunk.lines.filter((l) => l.kind !== 'add').map((l) => l.text);
 
 const matchesAt = (src: string[], pos: number, expected: string[]): boolean => {
     if (pos < 0 || pos + expected.length > src.length) {
@@ -188,7 +188,10 @@ export type ApplyUnifiedDiffResult = {
     rejectedHunks: number;
 };
 
-export function applyUnifiedDiffToText(originalText: string, patch: UnifiedDiffFile): ApplyUnifiedDiffResult {
+export function applyUnifiedDiffToText(
+    originalText: string,
+    patch: UnifiedDiffFile
+): ApplyUnifiedDiffResult {
     const original = splitText(originalText);
 
     // Normalize: treat a totally empty file as having 0 lines, not [''].
@@ -251,6 +254,10 @@ export function applyUnifiedDiffToText(originalText: string, patch: UnifiedDiffF
     // Copy remainder.
     out.push(...srcLines.slice(srcPos));
 
-    const resultText = joinText({ lines: out, eol: original.eol, endsWithNewline: original.endsWithNewline });
+    const resultText = joinText({
+        lines: out,
+        eol: original.eol,
+        endsWithNewline: original.endsWithNewline
+    });
     return { text: resultText, appliedHunks, rejectedHunks };
 }

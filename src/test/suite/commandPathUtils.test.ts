@@ -28,7 +28,6 @@ describe('commandPathUtils', () => {
         assert.strictEqual(normalizeCwd('C:\\repo\\foo', 'codespaces'), 'C:/repo/foo');
     });
 
-
     it('quoteShellArg only quotes when needed', () => {
         assert.strictEqual(quoteShellArg('plain'), 'plain');
         assert.strictEqual(quoteShellArg('has space'), '"has space"');
@@ -43,7 +42,10 @@ describe('commandPathUtils', () => {
 
     it('quoteShellArgs joins args for git command', () => {
         assert.strictEqual(quoteShellArgs(['apply', 'a.patch']), 'apply a.patch');
-        assert.strictEqual(quoteShellArgs(['show', 'HEAD:dir with space/file.txt']), 'show "HEAD:dir with space/file.txt"');
+        assert.strictEqual(
+            quoteShellArgs(['show', 'HEAD:dir with space/file.txt']),
+            'show "HEAD:dir with space/file.txt"'
+        );
     });
 
     it('getTempOutputLocation uses workspace temp dir for remote sessions', () => {
@@ -91,7 +93,10 @@ describe('commandPathUtils', () => {
             folderName: 'diff-root'
         });
         assert.strictEqual(remoteRoot.kind, 'workspace');
-        assert.strictEqual(remoteRoot.shellPath, `/home/user/proj/${PATCHITUP_TMP_DIRNAME}/diff-root`);
+        assert.strictEqual(
+            remoteRoot.shellPath,
+            `/home/user/proj/${PATCHITUP_TMP_DIRNAME}/diff-root`
+        );
 
         const localRoot = getTempRootLocation({
             remoteName: undefined,

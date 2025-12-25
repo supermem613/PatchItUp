@@ -5,7 +5,10 @@ import { createLogger } from './logger';
 export function activate(context: vscode.ExtensionContext) {
     const logger = createLogger();
     context.subscriptions.push(logger);
-    logger.info('PatchItUp extension is now active', { remoteName: vscode.env.remoteName, uiKind: vscode.env.uiKind });
+    logger.info('PatchItUp extension is now active', {
+        remoteName: vscode.env.remoteName,
+        uiKind: vscode.env.uiKind
+    });
 
     // Register the webview panel provider
     const provider = new PatchPanelProvider(context.extensionUri, logger);
@@ -34,7 +37,10 @@ export function activate(context: vscode.ExtensionContext) {
                 'Open Settings'
             );
             if (result === 'Open Settings') {
-                vscode.commands.executeCommand('workbench.action.openSettings', 'patchitup.destinationPath');
+                vscode.commands.executeCommand(
+                    'workbench.action.openSettings',
+                    'patchitup.destinationPath'
+                );
             }
             return;
         }

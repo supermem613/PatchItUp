@@ -1,5 +1,9 @@
 import * as assert from 'assert';
-import { detectIsRemoteLocalMachine, isLocalhostHostname, shouldUseVscodeLocalScheme } from '../../remoteSessionUtils';
+import {
+    detectIsRemoteLocalMachine,
+    isLocalhostHostname,
+    shouldUseVscodeLocalScheme
+} from '../../remoteSessionUtils';
 
 describe('remoteSessionUtils', () => {
     it('isLocalhostHostname detects common localhost hostnames', () => {

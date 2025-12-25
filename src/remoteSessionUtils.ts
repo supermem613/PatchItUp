@@ -18,7 +18,10 @@ export function isLocalhostHostname(hostname: string): boolean {
  * - Returns false for Codespaces.
  * - Defaults to false for unknown remotes.
  */
-export function detectIsRemoteLocalMachine(remoteName: string | undefined, hostname: string): boolean {
+export function detectIsRemoteLocalMachine(
+    remoteName: string | undefined,
+    hostname: string
+): boolean {
     if (remoteName === undefined) {
         return false;
     }
@@ -45,6 +48,9 @@ export function detectIsRemoteLocalMachine(remoteName: string | undefined, hostn
 /**
  * Returns true only when running in a true remote environment (not local machine).
  */
-export function shouldUseVscodeLocalScheme(remoteName: string | undefined, isRemoteLocalMachine: boolean): boolean {
+export function shouldUseVscodeLocalScheme(
+    remoteName: string | undefined,
+    isRemoteLocalMachine: boolean
+): boolean {
     return remoteName !== undefined && !isRemoteLocalMachine;
 }

@@ -42,7 +42,7 @@ function joinPosix(root: string, ...parts: string[]): string {
     const cleanedRoot = root.endsWith('/') ? root.slice(0, -1) : root;
     const cleanedParts = parts
         .filter(Boolean)
-        .map(p => p.replace(/^\/+/, '').replace(/\/+$/, ''))
+        .map((p) => p.replace(/^\/+/, '').replace(/\/+$/, ''))
         .filter(Boolean);
     return [cleanedRoot, ...cleanedParts].join('/');
 }
@@ -53,7 +53,9 @@ export function getTempOutputLocation(params: {
     osTmpDir: string;
     fileName?: string;
 }): TempLocation {
-    const fileName = params.fileName ?? `.patchitup-temp-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
+    const fileName =
+        params.fileName ??
+        `.patchitup-temp-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
 
     if (isRemoteSession(params.remoteName) && params.workspaceRootPosixPath) {
         return {
@@ -73,7 +75,8 @@ export function getTempRootLocation(params: {
     osTmpDir: string;
     folderName?: string;
 }): TempLocation {
-    const folderName = params.folderName ?? `patchitup-diff-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const folderName =
+        params.folderName ?? `patchitup-diff-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
     if (isRemoteSession(params.remoteName) && params.workspaceRootPosixPath) {
         return {

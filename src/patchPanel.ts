@@ -4,14 +4,23 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 import { applyUnifiedDiffToText, parseUnifiedDiffFiles, type UnifiedDiffFile } from './unifiedDiff';
-import { applyPatchWithGit, getStripCandidates, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
+import {
+    applyPatchWithGit,
+    getStripCandidates,
+    guessPreferredStripLevel,
+    selectStripLevelForPatch
+} from './gitApply';
 import {
     getTempRootLocation,
     isRemoteSession,
     normalizeCwd,
     PATCHITUP_TMP_DIRNAME
 } from './commandPathUtils';
-import { detectIsRemoteLocalMachine, isLocalhostHostname, shouldUseVscodeLocalScheme } from './remoteSessionUtils';
+import {
+    detectIsRemoteLocalMachine,
+    isLocalhostHostname,
+    shouldUseVscodeLocalScheme
+} from './remoteSessionUtils';
 import { Logger } from './logger';
 import { withStepProgress } from './progressSteps';
 
@@ -20,7 +29,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     private _view?: vscode.WebviewView;
     private _isRemoteLocalMachine: boolean | undefined;
 
-    constructor(private readonly _extensionUri: vscode.Uri, private readonly logger: Logger) {}
+    constructor(
+        private readonly _extensionUri: vscode.Uri,
+        private readonly logger: Logger
+    ) {}
 
     /**
      * Determines if the current remote environment is actually the local machine.
@@ -28,7 +40,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
      * - WSL on the same Windows machine
      * - Dev Containers running locally
      * - SSH to localhost
-     * 
+     *
      * When the remote IS the local machine, we can use regular file:// scheme
      * instead of vscode-local:// for better performance and simpler code paths.
      */
@@ -39,7 +51,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         }
 
         const remoteName = vscode.env.remoteName;
-        
+
         // Not running remotely at all
         if (remoteName === undefined) {
             this._isRemoteLocalMachine = false;
@@ -63,7 +75,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             } else if (remoteName === 'ssh-remote') {
                 this.logger.info('isRemoteLocalMachine: SSH', { hostname, isLocal });
             } else {
-                this.logger.info('isRemoteLocalMachine: unknown remote type, returning false', { remoteName });
+                this.logger.info('isRemoteLocalMachine: unknown remote type, returning false', {
+                    remoteName
+                });
             }
 
             return isLocal;
@@ -97,7 +111,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     // Execute git command via VS Code Tasks and capture output.
-    private async executeGitCommand(args: string[], cwd: string, allowedExitCodes: number[] = [0]): Promise<string> {
+    private async executeGitCommand(
+        args: string[],
+        cwd: string,
+        allowedExitCodes: number[] = [0]
+    ): Promise<string> {
         const result = await this.executeGitCommandResult(args, cwd, allowedExitCodes);
         return result.output;
     }
@@ -131,7 +149,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             }
             const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
             await vscode.workspace.fs.createDirectory(tmpDirUri);
-            tempRootUri = vscode.Uri.joinPath(workspaceFolder.uri, ...tempRootLocation.relativeSegments);
+            tempRootUri = vscode.Uri.joinPath(
+                workspaceFolder.uri,
+                ...tempRootLocation.relativeSegments
+            );
         } else {
             tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
         }
@@ -142,7 +163,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         const stdoutUri = vscode.Uri.joinPath(runDirUri, 'out.txt');
         const exitCodeUri = vscode.Uri.joinPath(runDirUri, 'code.txt');
-        const stdinUri = stdin !== undefined ? vscode.Uri.joinPath(runDirUri, 'stdin.txt') : undefined;
+        const stdinUri =
+            stdin !== undefined ? vscode.Uri.joinPath(runDirUri, 'stdin.txt') : undefined;
 
         if (stdinUri && stdin !== undefined) {
             await vscode.workspace.fs.writeFile(stdinUri, new TextEncoder().encode(stdin));
@@ -172,8 +194,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             : undefined;
 
         const gitArgsJoined = useBash
-            ? args.map(a => quoteBash(a)).join(' ')
-            : args.map(a => quoteCmd(a)).join(' ');
+            ? args.map((a) => quoteBash(a)).join(' ')
+            : args.map((a) => quoteCmd(a)).join(' ');
 
         let shellCommand: string;
         let shellArgs: string[];
@@ -252,8 +274,13 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         if (!allowedExitCodes.includes(exitCode)) {
             const trimmed = output.trim();
-            this.logger.error('executeGitCommand non-allowed exit code', { exitCode, output: trimmed });
-            throw new Error(`Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`);
+            this.logger.error('executeGitCommand non-allowed exit code', {
+                exitCode,
+                output: trimmed
+            });
+            throw new Error(
+                `Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`
+            );
         }
 
         if (output.trim()) {
@@ -358,13 +385,13 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
     private async refreshPatchList(destPath: string) {
         console.log('refreshPatchList called:', { hasView: !!this._view, destPath });
-        
+
         if (!this._view) {
             console.log('refreshPatchList: view not available');
             vscode.window.showWarningMessage('PatchItUp: View not available for refresh');
             return;
         }
-        
+
         if (!destPath) {
             console.log('refreshPatchList: destPath not provided');
             vscode.window.showWarningMessage('PatchItUp: Destination path not configured');
@@ -379,17 +406,24 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             const isRemote = vscode.env.remoteName !== undefined;
             const isRemoteLocal = await this.isRemoteLocalMachine();
             const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
-            console.log('refreshPatchList:', { isRemote, isRemoteLocal, useVscodeLocal, remoteName: vscode.env.remoteName, destPath, uiKind: vscode.env.uiKind });
+            console.log('refreshPatchList:', {
+                isRemote,
+                isRemoteLocal,
+                useVscodeLocal,
+                remoteName: vscode.env.remoteName,
+                destPath,
+                uiKind: vscode.env.uiKind
+            });
             let patches: string[] = [];
 
             // Use the appropriate URI scheme based on environment detection
             let dirUri = await this.getLocalFileUri(destPath);
             console.log('Using URI:', dirUri.toString());
-            
+
             try {
                 const files = await vscode.workspace.fs.readDirectory(dirUri);
                 console.log('Found files:', files.length);
-                
+
                 // Get file stats for each patch file
                 const patchFiles = files
                     .filter(([name, type]) => {
@@ -398,7 +432,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return isPatch;
                     })
                     .map(([name]) => name);
-                
+
                 // Get creation times for all patch files
                 const filesWithStats = await Promise.all(
                     patchFiles.map(async (name) => {
@@ -407,35 +441,59 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return { name, ctime: stat.ctime };
                     })
                 );
-                
+
                 // Sort by creation time, newest first
                 patches = filesWithStats
                     .sort((a, b) => {
-                        console.log('Comparing:', a.name, '(', a.ctime, ') vs', b.name, '(', b.ctime, '), result:', b.ctime - a.ctime);
+                        console.log(
+                            'Comparing:',
+                            a.name,
+                            '(',
+                            a.ctime,
+                            ') vs',
+                            b.name,
+                            '(',
+                            b.ctime,
+                            '), result:',
+                            b.ctime - a.ctime
+                        );
                         return b.ctime - a.ctime;
                     })
-                    .map(f => f.name);
+                    .map((f) => f.name);
                 console.log('Filtered patches:', patches);
             } catch (error: any) {
                 // If vscode-local fails and we're using it, try regular file scheme as fallback
-                console.log('Initial scheme failed, error:', error, 'code:', error.code, 'name:', error.name);
-                if (useVscodeLocal && (error.code === 'ENOPRO' || error.name === 'EntryNotFound (FileSystemError)' || error.message?.includes('No file system provider'))) {
+                console.log(
+                    'Initial scheme failed, error:',
+                    error,
+                    'code:',
+                    error.code,
+                    'name:',
+                    error.name
+                );
+                if (
+                    useVscodeLocal &&
+                    (error.code === 'ENOPRO' ||
+                        error.name === 'EntryNotFound (FileSystemError)' ||
+                        error.message?.includes('No file system provider'))
+                ) {
                     console.log('Fallback: trying regular file scheme');
                     try {
                         dirUri = vscode.Uri.file(destPath);
                         console.log('Using file URI:', dirUri.toString());
                         const files = await vscode.workspace.fs.readDirectory(dirUri);
                         console.log('Found files with file scheme:', files.length);
-                        
+
                         // Get file stats for each patch file
                         const patchFiles = files
                             .filter(([name, type]) => {
-                                const isPatch = type === vscode.FileType.File && name.endsWith('.patch');
+                                const isPatch =
+                                    type === vscode.FileType.File && name.endsWith('.patch');
                                 if (isPatch) console.log('Found patch file:', name);
                                 return isPatch;
                             })
                             .map(([name]) => name);
-                        
+
                         // Get creation times for all patch files
                         const filesWithStats = await Promise.all(
                             patchFiles.map(async (name) => {
@@ -444,23 +502,38 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                                 return { name, ctime: stat.ctime };
                             })
                         );
-                        
+
                         // Sort by creation time, newest first
                         patches = filesWithStats
                             .sort((a, b) => {
-                                console.log('Comparing:', a.name, '(', a.ctime, ') vs', b.name, '(', b.ctime, '), result:', b.ctime - a.ctime);
+                                console.log(
+                                    'Comparing:',
+                                    a.name,
+                                    '(',
+                                    a.ctime,
+                                    ') vs',
+                                    b.name,
+                                    '(',
+                                    b.ctime,
+                                    '), result:',
+                                    b.ctime - a.ctime
+                                );
                                 return b.ctime - a.ctime;
                             })
-                            .map(f => f.name);
+                            .map((f) => f.name);
                         console.log('Filtered patches:', patches);
                     } catch (innerError: any) {
                         console.error('Error reading with file scheme:', innerError);
-                        vscode.window.showErrorMessage(`Could not read patches from ${destPath}: ${innerError.message || innerError}`);
+                        vscode.window.showErrorMessage(
+                            `Could not read patches from ${destPath}: ${innerError.message || innerError}`
+                        );
                         patches = [];
                     }
                 } else {
                     console.error('Error reading directory (not fallback case):', error);
-                    vscode.window.showErrorMessage(`Could not read patches from ${destPath}: ${error.message || error}`);
+                    vscode.window.showErrorMessage(
+                        `Could not read patches from ${destPath}: ${error.message || error}`
+                    );
                     patches = [];
                 }
             }
@@ -472,7 +545,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             });
         } catch (error: any) {
             console.error('Error refreshing patch list:', error);
-            vscode.window.showErrorMessage(`Error refreshing patch list: ${error.message || error}`);
+            vscode.window.showErrorMessage(
+                `Error refreshing patch list: ${error.message || error}`
+            );
         }
     }
 
@@ -494,7 +569,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     }
 
                     if (!(await this.doesSourceDirectoryExist(sourceDir))) {
-                        vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+                        vscode.window.showErrorMessage(
+                            `Source directory does not exist: ${sourceDir}`
+                        );
                         return;
                     }
 
@@ -502,7 +579,13 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     const isRemote = vscode.env.remoteName !== undefined;
                     const isRemoteLocal = await this.isRemoteLocalMachine();
                     const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
-                    console.log('createPatch:', { isRemote, isRemoteLocal, useVscodeLocal, sourceDir, destPath });
+                    console.log('createPatch:', {
+                        isRemote,
+                        isRemoteLocal,
+                        useVscodeLocal,
+                        sourceDir,
+                        destPath
+                    });
 
                     steps.next('Generate patch');
                     // Check for changes using executeGitCommand
@@ -511,7 +594,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         steps.detail('Running git diff');
                         patchContent = await this.executeGitCommand(['diff', 'HEAD'], sourceDir);
                         if (!patchContent.trim()) {
-                            vscode.window.showInformationMessage('No changes to create a patch from.');
+                            vscode.window.showInformationMessage(
+                                'No changes to create a patch from.'
+                            );
                             return;
                         }
                     } catch (error: any) {
@@ -563,7 +648,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     } catch (error: any) {
                         // If vscode-local fails and we were using it, try regular file scheme as fallback
                         console.log('Write failed, error:', error, 'code:', error.code);
-                        if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
+                        if (
+                            useVscodeLocal &&
+                            (error.code === 'ENOPRO' ||
+                                error.message?.includes('No file system provider'))
+                        ) {
                             steps.detail('Retrying write with file scheme');
                             console.log('Fallback: trying regular file scheme for write');
                             destinationUri = vscode.Uri.file(path.join(destPath, filename));
@@ -602,7 +691,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     }
 
                     if (!(await this.doesSourceDirectoryExist(sourceDir))) {
-                        vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+                        vscode.window.showErrorMessage(
+                            `Source directory does not exist: ${sourceDir}`
+                        );
                         return;
                     }
 
@@ -619,7 +710,12 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                             cwd: sourceDir,
                             preferredStrip,
                             runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
-                                this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                                this.executeGitCommandResult(
+                                    args,
+                                    cwd,
+                                    allowedExitCodes ?? [0],
+                                    stdin
+                                )
                         });
 
                         this.logger.info('applyPatch: selected git apply strip level', {
@@ -634,22 +730,38 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                             cwd: sourceDir,
                             stripLevel: selection.selectedStrip,
                             runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
-                                this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                                this.executeGitCommandResult(
+                                    args,
+                                    cwd,
+                                    allowedExitCodes ?? [0],
+                                    stdin
+                                )
                         });
 
                         const trimmed = result.output.trim();
-                        this.logger.info('applyPatch: git apply output', { exitCode: result.exitCode, output: trimmed });
+                        this.logger.info('applyPatch: git apply output', {
+                            exitCode: result.exitCode,
+                            output: trimmed
+                        });
 
                         const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
                         if (result.exitCode !== 0 || isSkippedOutput(trimmed)) {
-                            throw new Error(trimmed || `git apply returned exit code ${result.exitCode}`);
+                            throw new Error(
+                                trimmed || `git apply returned exit code ${result.exitCode}`
+                            );
                         }
 
                         steps.next('Done');
-                        vscode.window.showInformationMessage(`Patch applied successfully: ${patchFile}`);
+                        vscode.window.showInformationMessage(
+                            `Patch applied successfully: ${patchFile}`
+                        );
                     } catch (error: any) {
-                        this.logger.error('applyPatch failed', { error: error?.message ?? String(error) });
-                        vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
+                        this.logger.error('applyPatch failed', {
+                            error: error?.message ?? String(error)
+                        });
+                        vscode.window.showErrorMessage(
+                            `Failed to apply patch: ${error.message || error}`
+                        );
                     }
                 } catch (error) {
                     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -678,636 +790,873 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 try {
                     steps.next('Load patch content');
                     const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
-                    this.logger.info('diffPatch: loaded patch', { patchFile, bytes: patchContent.length, sourceDir });
+                    this.logger.info('diffPatch: loaded patch', {
+                        patchFile,
+                        bytes: patchContent.length,
+                        sourceDir
+                    });
 
-            // Quick sanity stats for the patch content.
-            // Helps identify cases where the patch has headers but no hunks.
-            const patchLines = patchContent.split(/\r?\n/);
-            const hunkCount = patchLines.filter(l => l.startsWith('@@')).length;
-            let addLines = 0;
-            let delLines = 0;
-            for (const line of patchLines) {
-                if (line.startsWith('+++') || line.startsWith('---')) {
-                    continue;
-                }
-                if (line.startsWith('+')) {
-                    addLines++;
-                } else if (line.startsWith('-')) {
-                    delLines++;
-                }
-            }
-            this.logger.info('diffPatch: patch stats', { hunkCount, addLines, delLines });
+                    // Quick sanity stats for the patch content.
+                    // Helps identify cases where the patch has headers but no hunks.
+                    const patchLines = patchContent.split(/\r?\n/);
+                    const hunkCount = patchLines.filter((l) => l.startsWith('@@')).length;
+                    let addLines = 0;
+                    let delLines = 0;
+                    for (const line of patchLines) {
+                        if (line.startsWith('+++') || line.startsWith('---')) {
+                            continue;
+                        }
+                        if (line.startsWith('+')) {
+                            addLines++;
+                        } else if (line.startsWith('-')) {
+                            delLines++;
+                        }
+                    }
+                    this.logger.info('diffPatch: patch stats', { hunkCount, addLines, delLines });
 
-            steps.next('Parse patch file list');
-            const fileEdits = parseGitPatchFileEdits(patchContent);
-            if (fileEdits.length === 0) {
-                vscode.window.showWarningMessage('Selected patch contains no file diffs');
-                return;
-            }
-
-            this.logger.info('diffPatch: parsed file edits', { count: fileEdits.length, sample: fileEdits.slice(0, 5) });
-
-            const guessPreferredStripLevel = (content: string): number => {
-                const firstDiffLine = content.split(/\r?\n/).find(l => l.startsWith('diff --git '));
-                if (!firstDiffLine) {
-                    return 1;
-                }
-                const parts = firstDiffLine.split(' ');
-                const left = parts[2] ?? '';
-                const right = parts[3] ?? '';
-                if (left.startsWith('a/') || right.startsWith('b/')) {
-                    return 1;
-                }
-                return 0;
-            };
-
-            steps.next('Prepare preview workspace');
-            const remoteName = vscode.env.remoteName;
-            const isRemote = isRemoteSession(remoteName);
-            const normalizedSourceDir = normalizeCwd(sourceDir, remoteName);
-
-            // Temp folder must live in the same environment where git runs.
-            // In remote sessions, tasks execute remotely, so create temp folders under the workspace.
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            const tempRootLocation = getTempRootLocation({
-                remoteName,
-                workspaceRootPosixPath: workspaceFolder?.uri.path,
-                osTmpDir: os.tmpdir()
-            });
-
-            let tempRootUri: vscode.Uri;
-            if (tempRootLocation.kind === 'workspace') {
-                if (!workspaceFolder) {
-                    throw new Error('No workspace folder open');
-                }
-                const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
-                await vscode.workspace.fs.createDirectory(tmpDirUri);
-                tempRootUri = vscode.Uri.joinPath(workspaceFolder.uri, ...tempRootLocation.relativeSegments);
-            } else {
-                tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
-            }
-
-            const originalRootUri = vscode.Uri.joinPath(tempRootUri, 'original');
-            const patchedRootUri = vscode.Uri.joinPath(tempRootUri, 'patched');
-            await vscode.workspace.fs.createDirectory(originalRootUri);
-            await vscode.workspace.fs.createDirectory(patchedRootUri);
-
-            this.logger.info('diffPatch: temp roots', {
-                tempRootUri: tempRootUri.toString(),
-                originalRootUri: originalRootUri.toString(),
-                patchedRootUri: patchedRootUri.toString(),
-                remoteName
-            });
-
-            const encoder = new TextEncoder();
-            const createEmpty = async (uri: vscode.Uri) => {
-                await this.ensureParentDirectory(uri);
-                await vscode.workspace.fs.writeFile(uri, encoder.encode(''));
-            };
-
-            const sourceRootUri = this.getUriForDirectory(normalizedSourceDir);
-            this.logger.info('diffPatch: source root uri', { sourceRootUri: sourceRootUri.toString(), normalizedSourceDir, remoteName });
-
-            // Compare workspace file content hashes against patch index blobs.
-            // If the working tree matches the patch's *newBlob*, the patch will appear "already applied".
-            // If it matches *oldBlob*, the patch should produce differences.
-            // If it matches neither, the patch may be from a different base.
-            try {
-                const hashComparisons: Array<{
-                    path: string;
-                    oldBlob?: string;
-                    newBlob?: string;
-                    hash?: string;
-                    matches?: 'old' | 'new' | 'neither' | 'unknown';
-                    error?: string;
-                }> = [];
-
-                for (const edit of fileEdits) {
-                    if (edit.status !== 'modified') {
-                        continue;
+                    steps.next('Parse patch file list');
+                    const fileEdits = parseGitPatchFileEdits(patchContent);
+                    if (fileEdits.length === 0) {
+                        vscode.window.showWarningMessage('Selected patch contains no file diffs');
+                        return;
                     }
 
-                    const filePath = edit.oldPath;
-                    try {
-                        // `git hash-object` works even outside of a git repo (it just hashes a file).
-                        const hashText = await this.executeGitCommand(['hash-object', filePath], normalizedSourceDir);
-                        const hash = hashText.trim();
+                    this.logger.info('diffPatch: parsed file edits', {
+                        count: fileEdits.length,
+                        sample: fileEdits.slice(0, 5)
+                    });
 
-                        const oldBlob = edit.oldBlob;
-                        const newBlob = edit.newBlob;
-                        let matches: 'old' | 'new' | 'neither' | 'unknown' = 'unknown';
-                        if (oldBlob && newBlob && hash) {
-                            if (hash.startsWith(oldBlob)) {
-                                matches = 'old';
-                            } else if (hash.startsWith(newBlob)) {
-                                matches = 'new';
-                            } else {
-                                matches = 'neither';
+                    const guessPreferredStripLevel = (content: string): number => {
+                        const firstDiffLine = content
+                            .split(/\r?\n/)
+                            .find((l) => l.startsWith('diff --git '));
+                        if (!firstDiffLine) {
+                            return 1;
+                        }
+                        const parts = firstDiffLine.split(' ');
+                        const left = parts[2] ?? '';
+                        const right = parts[3] ?? '';
+                        if (left.startsWith('a/') || right.startsWith('b/')) {
+                            return 1;
+                        }
+                        return 0;
+                    };
+
+                    steps.next('Prepare preview workspace');
+                    const remoteName = vscode.env.remoteName;
+                    const isRemote = isRemoteSession(remoteName);
+                    const normalizedSourceDir = normalizeCwd(sourceDir, remoteName);
+
+                    // Temp folder must live in the same environment where git runs.
+                    // In remote sessions, tasks execute remotely, so create temp folders under the workspace.
+                    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+                    const tempRootLocation = getTempRootLocation({
+                        remoteName,
+                        workspaceRootPosixPath: workspaceFolder?.uri.path,
+                        osTmpDir: os.tmpdir()
+                    });
+
+                    let tempRootUri: vscode.Uri;
+                    if (tempRootLocation.kind === 'workspace') {
+                        if (!workspaceFolder) {
+                            throw new Error('No workspace folder open');
+                        }
+                        const tmpDirUri = vscode.Uri.joinPath(
+                            workspaceFolder.uri,
+                            PATCHITUP_TMP_DIRNAME
+                        );
+                        await vscode.workspace.fs.createDirectory(tmpDirUri);
+                        tempRootUri = vscode.Uri.joinPath(
+                            workspaceFolder.uri,
+                            ...tempRootLocation.relativeSegments
+                        );
+                    } else {
+                        tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
+                    }
+
+                    const originalRootUri = vscode.Uri.joinPath(tempRootUri, 'original');
+                    const patchedRootUri = vscode.Uri.joinPath(tempRootUri, 'patched');
+                    await vscode.workspace.fs.createDirectory(originalRootUri);
+                    await vscode.workspace.fs.createDirectory(patchedRootUri);
+
+                    this.logger.info('diffPatch: temp roots', {
+                        tempRootUri: tempRootUri.toString(),
+                        originalRootUri: originalRootUri.toString(),
+                        patchedRootUri: patchedRootUri.toString(),
+                        remoteName
+                    });
+
+                    const encoder = new TextEncoder();
+                    const createEmpty = async (uri: vscode.Uri) => {
+                        await this.ensureParentDirectory(uri);
+                        await vscode.workspace.fs.writeFile(uri, encoder.encode(''));
+                    };
+
+                    const sourceRootUri = this.getUriForDirectory(normalizedSourceDir);
+                    this.logger.info('diffPatch: source root uri', {
+                        sourceRootUri: sourceRootUri.toString(),
+                        normalizedSourceDir,
+                        remoteName
+                    });
+
+                    // Compare workspace file content hashes against patch index blobs.
+                    // If the working tree matches the patch's *newBlob*, the patch will appear "already applied".
+                    // If it matches *oldBlob*, the patch should produce differences.
+                    // If it matches neither, the patch may be from a different base.
+                    try {
+                        const hashComparisons: Array<{
+                            path: string;
+                            oldBlob?: string;
+                            newBlob?: string;
+                            hash?: string;
+                            matches?: 'old' | 'new' | 'neither' | 'unknown';
+                            error?: string;
+                        }> = [];
+
+                        for (const edit of fileEdits) {
+                            if (edit.status !== 'modified') {
+                                continue;
+                            }
+
+                            const filePath = edit.oldPath;
+                            try {
+                                // `git hash-object` works even outside of a git repo (it just hashes a file).
+                                const hashText = await this.executeGitCommand(
+                                    ['hash-object', filePath],
+                                    normalizedSourceDir
+                                );
+                                const hash = hashText.trim();
+
+                                const oldBlob = edit.oldBlob;
+                                const newBlob = edit.newBlob;
+                                let matches: 'old' | 'new' | 'neither' | 'unknown' = 'unknown';
+                                if (oldBlob && newBlob && hash) {
+                                    if (hash.startsWith(oldBlob)) {
+                                        matches = 'old';
+                                    } else if (hash.startsWith(newBlob)) {
+                                        matches = 'new';
+                                    } else {
+                                        matches = 'neither';
+                                    }
+                                }
+
+                                hashComparisons.push({
+                                    path: filePath,
+                                    oldBlob,
+                                    newBlob,
+                                    hash,
+                                    matches
+                                });
+                            } catch (e) {
+                                hashComparisons.push({
+                                    path: filePath,
+                                    oldBlob: edit.oldBlob,
+                                    newBlob: edit.newBlob,
+                                    matches: 'unknown',
+                                    error: e instanceof Error ? e.message : String(e)
+                                });
                             }
                         }
 
-                        hashComparisons.push({ path: filePath, oldBlob, newBlob, hash, matches });
+                        this.logger.info('diffPatch: hash comparisons', { hashComparisons });
                     } catch (e) {
-                        hashComparisons.push({
-                            path: filePath,
-                            oldBlob: edit.oldBlob,
-                            newBlob: edit.newBlob,
-                            matches: 'unknown',
+                        this.logger.warn('diffPatch: hash comparison pass failed', {
                             error: e instanceof Error ? e.message : String(e)
                         });
                     }
-                }
 
-                this.logger.info('diffPatch: hash comparisons', { hashComparisons });
-            } catch (e) {
-                this.logger.warn('diffPatch: hash comparison pass failed', { error: e instanceof Error ? e.message : String(e) });
-            }
+                    const readBaseBytes = async (edit: PatchFileEdit): Promise<Uint8Array> => {
+                        // Goal: make preview independent of the current working tree state.
+                        // A unified diff doesn't contain a full "before" file, only hunks, so we must
+                        // fetch a baseline. Best source is the patch's `index` old blob (exact bytes).
+                        // If that object isn't available in the local clone (common in partial clones),
+                        // fall back to `HEAD:<path>`, then finally the working tree.
 
-            const readBaseBytes = async (edit: PatchFileEdit): Promise<Uint8Array> => {
-                // Goal: make preview independent of the current working tree state.
-                // A unified diff doesn't contain a full "before" file, only hunks, so we must
-                // fetch a baseline. Best source is the patch's `index` old blob (exact bytes).
-                // If that object isn't available in the local clone (common in partial clones),
-                // fall back to `HEAD:<path>`, then finally the working tree.
+                        // 1) Patch-annotated old blob (most correct, if available)
+                        if (
+                            edit.oldBlob &&
+                            edit.oldBlob !== '0000000' &&
+                            !/^0+$/.test(edit.oldBlob)
+                        ) {
+                            try {
+                                const blobText = await this.executeGitCommand(
+                                    ['cat-file', '-p', edit.oldBlob],
+                                    normalizedSourceDir
+                                );
+                                return encoder.encode(blobText);
+                            } catch {
+                                // ignore
+                            }
+                        }
 
-                // 1) Patch-annotated old blob (most correct, if available)
-                if (edit.oldBlob && edit.oldBlob !== '0000000' && !/^0+$/.test(edit.oldBlob)) {
-                    try {
-                        const blobText = await this.executeGitCommand(['cat-file', '-p', edit.oldBlob], normalizedSourceDir);
-                        return encoder.encode(blobText);
-                    } catch {
-                        // ignore
-                    }
-                }
+                        // 2) Committed baseline
+                        try {
+                            const showText = await this.executeGitCommand(
+                                ['show', `HEAD:${edit.oldPath}`],
+                                normalizedSourceDir
+                            );
+                            return encoder.encode(showText);
+                        } catch {
+                            // ignore
+                        }
 
-                // 2) Committed baseline
-                try {
-                    const showText = await this.executeGitCommand(['show', `HEAD:${edit.oldPath}`], normalizedSourceDir);
-                    return encoder.encode(showText);
-                } catch {
-                    // ignore
-                }
+                        // 3) Working tree (last resort)
+                        try {
+                            const workingTreeUri = this.joinUriPath(sourceRootUri, edit.oldPath);
+                            return await vscode.workspace.fs.readFile(workingTreeUri);
+                        } catch {
+                            // ignore
+                        }
 
-                // 3) Working tree (last resort)
-                try {
-                    const workingTreeUri = this.joinUriPath(sourceRootUri, edit.oldPath);
-                    return await vscode.workspace.fs.readFile(workingTreeUri);
-                } catch {
-                    // ignore
-                }
-
-                return encoder.encode('');
-            };
+                        return encoder.encode('');
+                    };
 
                     steps.next('Materialize baseline files');
                     steps.detail(`0/${fileEdits.length} files`);
 
-            // Materialize pre-apply files into original/ using the workspace as a source.
-            // We'll later copy original/ -> patched/ and apply the patch there.
+                    // Materialize pre-apply files into original/ using the workspace as a source.
+                    // We'll later copy original/ -> patched/ and apply the patch there.
                     for (let i = 0; i < fileEdits.length; i++) {
                         const edit = fileEdits[i];
                         if (i === 0 || i % 5 === 0 || i === fileEdits.length - 1) {
-                            steps.detail(`${Math.min(i, fileEdits.length)}/${fileEdits.length} files`);
+                            steps.detail(
+                                `${Math.min(i, fileEdits.length)}/${fileEdits.length} files`
+                            );
                         }
-                const originalRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                const patchedRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+                        const originalRelPath =
+                            edit.status === 'added' ? edit.newPath : edit.oldPath;
+                        const patchedRelPath =
+                            edit.status === 'deleted' ? edit.oldPath : edit.newPath;
 
-                const originalFileUri = this.joinUriPath(originalRootUri, originalRelPath);
-                const patchedFileUri = this.joinUriPath(patchedRootUri, patchedRelPath);
+                        const originalFileUri = this.joinUriPath(originalRootUri, originalRelPath);
+                        const patchedFileUri = this.joinUriPath(patchedRootUri, patchedRelPath);
 
-                if (edit.status === 'added') {
-                    await createEmpty(originalFileUri);
-                    // patched file will be created by git apply, but make sure the directory exists
-                    await this.ensureParentDirectory(patchedFileUri);
-                    continue;
-                }
+                        if (edit.status === 'added') {
+                            await createEmpty(originalFileUri);
+                            // patched file will be created by git apply, but make sure the directory exists
+                            await this.ensureParentDirectory(patchedFileUri);
+                            continue;
+                        }
 
-                const contentBytes = await readBaseBytes(edit);
+                        const contentBytes = await readBaseBytes(edit);
 
-                await this.ensureParentDirectory(originalFileUri);
-                await vscode.workspace.fs.writeFile(originalFileUri, contentBytes);
+                        await this.ensureParentDirectory(originalFileUri);
+                        await vscode.workspace.fs.writeFile(originalFileUri, contentBytes);
 
-                // Ensure directories for the final path exist (e.g., rename to new folder).
-                await this.ensureParentDirectory(patchedFileUri);
-            }
+                        // Ensure directories for the final path exist (e.g., rename to new folder).
+                        await this.ensureParentDirectory(patchedFileUri);
+                    }
 
                     steps.detail(`${fileEdits.length}/${fileEdits.length} files`);
 
-            // Fast-path preview: if we can read both old/new blobs from the local object DB,
-            // we can build an exact before/after preview without running `git apply` at all.
-            // This matches the user's expectation: diff is derived from the patch's annotated
-            // old/new versions, not the current workspace state.
-            const readBlobBytes = async (blob: string | undefined): Promise<Uint8Array | undefined> => {
-                if (!blob || blob === '0000000' || /^0+$/.test(blob)) {
-                    return undefined;
-                }
-                try {
-                    const blobText = await this.executeGitCommand(['cat-file', '-p', blob], normalizedSourceDir);
-                    return encoder.encode(blobText);
-                } catch {
-                    return undefined;
-                }
-            };
+                    // Fast-path preview: if we can read both old/new blobs from the local object DB,
+                    // we can build an exact before/after preview without running `git apply` at all.
+                    // This matches the user's expectation: diff is derived from the patch's annotated
+                    // old/new versions, not the current workspace state.
+                    const readBlobBytes = async (
+                        blob: string | undefined
+                    ): Promise<Uint8Array | undefined> => {
+                        if (!blob || blob === '0000000' || /^0+$/.test(blob)) {
+                            return undefined;
+                        }
+                        try {
+                            const blobText = await this.executeGitCommand(
+                                ['cat-file', '-p', blob],
+                                normalizedSourceDir
+                            );
+                            return encoder.encode(blobText);
+                        } catch {
+                            return undefined;
+                        }
+                    };
 
                     steps.next('Build patched preview');
                     steps.detail('Trying exact blob preview');
 
-            let usedBlobPreview = true;
-            for (const edit of fileEdits) {
-                if (edit.status === 'deleted') {
-                    // Represent deletion as an empty right side.
-                    const deletedUri = this.joinUriPath(patchedRootUri, edit.oldPath);
-                    await createEmpty(deletedUri);
-                    continue;
-                }
-
-                const newBytes = await readBlobBytes(edit.newBlob);
-                if (!newBytes) {
-                    usedBlobPreview = false;
-                    break;
-                }
-
-                const outRelPath = edit.status === 'added' ? edit.newPath : edit.newPath;
-                const outUri = this.joinUriPath(patchedRootUri, outRelPath);
-                await this.ensureParentDirectory(outUri);
-                await vscode.workspace.fs.writeFile(outUri, newBytes);
-            }
-
-            if (usedBlobPreview) {
-                this.logger.info('diffPatch: using patch old/new blobs for preview (skipping git apply)', {
-                    patchFile,
-                    sourceDir,
-                    files: fileEdits.map(e => ({ path: e.newPath, status: e.status, oldBlob: e.oldBlob, newBlob: e.newBlob }))
-                });
-            }
-
-            // Second fast-path: when new blobs aren't available (common in partial clones),
-            // generate the "patched" side by applying unified-diff hunks in-process.
-            // This avoids relying on `git apply` (which has been observed to silently skip patches
-            // in some remote environments).
-                    let usedInProcessApplyPreview = false;
-            if (!usedBlobPreview) {
-                try {
-                    steps.detail('Applying hunks in-process');
-                    const diffFiles = parseUnifiedDiffFiles(patchContent);
-
-                    const byPath = new Map<string, UnifiedDiffFile>();
-                    for (const df of diffFiles) {
-                        byPath.set(df.newPath, df);
-                        byPath.set(df.oldPath, df);
-                    }
-
-                    let appliedAny = false;
-                    const perFile: Array<{ path: string; appliedHunks: number; rejectedHunks: number }> = [];
-
+                    let usedBlobPreview = true;
                     for (const edit of fileEdits) {
                         if (edit.status === 'deleted') {
+                            // Represent deletion as an empty right side.
                             const deletedUri = this.joinUriPath(patchedRootUri, edit.oldPath);
                             await createEmpty(deletedUri);
-                            perFile.push({ path: edit.oldPath, appliedHunks: 0, rejectedHunks: 0 });
                             continue;
                         }
 
-                        const patchForFile = byPath.get(edit.newPath) ?? byPath.get(edit.oldPath);
-                        if (!patchForFile || patchForFile.hunks.length === 0) {
-                            // No hunks for this file (rename-only, mode-only, etc.)
-                            const originalRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                            const originalUri = this.joinUriPath(originalRootUri, originalRelPath);
-                            const baseline = await vscode.workspace.fs.readFile(originalUri);
-                            const outUri = this.joinUriPath(patchedRootUri, edit.newPath);
-                            await this.ensureParentDirectory(outUri);
-                            await vscode.workspace.fs.writeFile(outUri, baseline);
-                            perFile.push({ path: edit.newPath, appliedHunks: 0, rejectedHunks: 0 });
-                            continue;
+                        const newBytes = await readBlobBytes(edit.newBlob);
+                        if (!newBytes) {
+                            usedBlobPreview = false;
+                            break;
                         }
 
-                        const baselineText =
-                            edit.status === 'added'
-                                ? ''
-                                : new TextDecoder().decode(
-                                      await vscode.workspace.fs.readFile(this.joinUriPath(originalRootUri, edit.oldPath))
-                                  );
-
-                        const result = applyUnifiedDiffToText(baselineText, patchForFile);
-                        if (result.appliedHunks > 0) {
-                            appliedAny = true;
-                        }
-                        perFile.push({ path: edit.newPath, appliedHunks: result.appliedHunks, rejectedHunks: result.rejectedHunks });
-
-                        const outUri = this.joinUriPath(patchedRootUri, edit.newPath);
+                        const outRelPath = edit.status === 'added' ? edit.newPath : edit.newPath;
+                        const outUri = this.joinUriPath(patchedRootUri, outRelPath);
                         await this.ensureParentDirectory(outUri);
-                        await vscode.workspace.fs.writeFile(outUri, encoder.encode(result.text));
+                        await vscode.workspace.fs.writeFile(outUri, newBytes);
                     }
 
-                    if (appliedAny) {
-                        usedInProcessApplyPreview = true;
-                        this.logger.info('diffPatch: built preview by applying hunks in-process (skipping git apply)', {
-                            patchFile,
-                            sourceDir,
-                            perFile
-                        });
-                    } else {
-                        this.logger.warn('diffPatch: in-process hunk apply produced no changes; will fall back to git apply', {
-                            patchFile,
-                            sourceDir,
-                            perFile
-                        });
+                    if (usedBlobPreview) {
+                        this.logger.info(
+                            'diffPatch: using patch old/new blobs for preview (skipping git apply)',
+                            {
+                                patchFile,
+                                sourceDir,
+                                files: fileEdits.map((e) => ({
+                                    path: e.newPath,
+                                    status: e.status,
+                                    oldBlob: e.oldBlob,
+                                    newBlob: e.newBlob
+                                }))
+                            }
+                        );
                     }
-                } catch (e) {
-                    this.logger.warn('diffPatch: in-process hunk apply failed; falling back to git apply', {
-                        error: e instanceof Error ? e.message : String(e)
-                    });
-                }
-            }
 
-            // If blobs aren't available, fall back to trying to apply the patch in a temp tree.
-            const originalRootShellPath = originalRootUri.scheme === 'file' ? originalRootUri.fsPath : originalRootUri.path;
-            const patchedRootShellPath = patchedRootUri.scheme === 'file' ? patchedRootUri.fsPath : patchedRootUri.path;
+                    // Second fast-path: when new blobs aren't available (common in partial clones),
+                    // generate the "patched" side by applying unified-diff hunks in-process.
+                    // This avoids relying on `git apply` (which has been observed to silently skip patches
+                    // in some remote environments).
+                    let usedInProcessApplyPreview = false;
+                    if (!usedBlobPreview) {
+                        try {
+                            steps.detail('Applying hunks in-process');
+                            const diffFiles = parseUnifiedDiffFiles(patchContent);
 
-            if (!usedBlobPreview && !usedInProcessApplyPreview) {
-                steps.detail('Applying patch in temp workspace');
-                const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
+                            const byPath = new Map<string, UnifiedDiffFile>();
+                            for (const df of diffFiles) {
+                                byPath.set(df.newPath, df);
+                                byPath.set(df.oldPath, df);
+                            }
 
-                const preferredStrip = guessPreferredStripLevel(patchContent);
-                const stripCandidates = getStripCandidates(preferredStrip);
+                            let appliedAny = false;
+                            const perFile: Array<{
+                                path: string;
+                                appliedHunks: number;
+                                rejectedHunks: number;
+                            }> = [];
 
-                const expectedPaths = fileEdits
-                    .map(e => (e.status === 'deleted' ? e.oldPath : e.newPath))
-                    .filter(Boolean);
+                            for (const edit of fileEdits) {
+                                if (edit.status === 'deleted') {
+                                    const deletedUri = this.joinUriPath(
+                                        patchedRootUri,
+                                        edit.oldPath
+                                    );
+                                    await createEmpty(deletedUri);
+                                    perFile.push({
+                                        path: edit.oldPath,
+                                        appliedHunks: 0,
+                                        rejectedHunks: 0
+                                    });
+                                    continue;
+                                }
 
-                const detectStripLevel = async (): Promise<number> => {
-                    for (const strip of stripCandidates) {
+                                const patchForFile =
+                                    byPath.get(edit.newPath) ?? byPath.get(edit.oldPath);
+                                if (!patchForFile || patchForFile.hunks.length === 0) {
+                                    // No hunks for this file (rename-only, mode-only, etc.)
+                                    const originalRelPath =
+                                        edit.status === 'added' ? edit.newPath : edit.oldPath;
+                                    const originalUri = this.joinUriPath(
+                                        originalRootUri,
+                                        originalRelPath
+                                    );
+                                    const baseline =
+                                        await vscode.workspace.fs.readFile(originalUri);
+                                    const outUri = this.joinUriPath(patchedRootUri, edit.newPath);
+                                    await this.ensureParentDirectory(outUri);
+                                    await vscode.workspace.fs.writeFile(outUri, baseline);
+                                    perFile.push({
+                                        path: edit.newPath,
+                                        appliedHunks: 0,
+                                        rejectedHunks: 0
+                                    });
+                                    continue;
+                                }
+
+                                const baselineText =
+                                    edit.status === 'added'
+                                        ? ''
+                                        : new TextDecoder().decode(
+                                              await vscode.workspace.fs.readFile(
+                                                  this.joinUriPath(originalRootUri, edit.oldPath)
+                                              )
+                                          );
+
+                                const result = applyUnifiedDiffToText(baselineText, patchForFile);
+                                if (result.appliedHunks > 0) {
+                                    appliedAny = true;
+                                }
+                                perFile.push({
+                                    path: edit.newPath,
+                                    appliedHunks: result.appliedHunks,
+                                    rejectedHunks: result.rejectedHunks
+                                });
+
+                                const outUri = this.joinUriPath(patchedRootUri, edit.newPath);
+                                await this.ensureParentDirectory(outUri);
+                                await vscode.workspace.fs.writeFile(
+                                    outUri,
+                                    encoder.encode(result.text)
+                                );
+                            }
+
+                            if (appliedAny) {
+                                usedInProcessApplyPreview = true;
+                                this.logger.info(
+                                    'diffPatch: built preview by applying hunks in-process (skipping git apply)',
+                                    {
+                                        patchFile,
+                                        sourceDir,
+                                        perFile
+                                    }
+                                );
+                            } else {
+                                this.logger.warn(
+                                    'diffPatch: in-process hunk apply produced no changes; will fall back to git apply',
+                                    {
+                                        patchFile,
+                                        sourceDir,
+                                        perFile
+                                    }
+                                );
+                            }
+                        } catch (e) {
+                            this.logger.warn(
+                                'diffPatch: in-process hunk apply failed; falling back to git apply',
+                                {
+                                    error: e instanceof Error ? e.message : String(e)
+                                }
+                            );
+                        }
+                    }
+
+                    // If blobs aren't available, fall back to trying to apply the patch in a temp tree.
+                    const originalRootShellPath =
+                        originalRootUri.scheme === 'file'
+                            ? originalRootUri.fsPath
+                            : originalRootUri.path;
+                    const patchedRootShellPath =
+                        patchedRootUri.scheme === 'file'
+                            ? patchedRootUri.fsPath
+                            : patchedRootUri.path;
+
+                    if (!usedBlobPreview && !usedInProcessApplyPreview) {
+                        steps.detail('Applying patch in temp workspace');
+                        const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
+
+                        const preferredStrip = guessPreferredStripLevel(patchContent);
+                        const stripCandidates = getStripCandidates(preferredStrip);
+
+                        const expectedPaths = fileEdits
+                            .map((e) => (e.status === 'deleted' ? e.oldPath : e.newPath))
+                            .filter(Boolean);
+
+                        const detectStripLevel = async (): Promise<number> => {
+                            for (const strip of stripCandidates) {
+                                try {
+                                    const stat = await this.executeGitCommandResult(
+                                        ['apply', `-p${strip}`, '--stat', '-'],
+                                        originalRootShellPath,
+                                        [0, 1],
+                                        patchContent
+                                    );
+                                    const statOut = stat.output.trim();
+
+                                    // Heuristic: choose the first strip level that produces a non-empty diffstat
+                                    // and references at least one expected path.
+                                    if (
+                                        stat.exitCode === 0 &&
+                                        statOut &&
+                                        statOut !== '0 files changed' &&
+                                        expectedPaths.some((p) => statOut.includes(p))
+                                    ) {
+                                        return strip;
+                                    }
+                                } catch {
+                                    // ignore
+                                }
+                            }
+
+                            // Fallback: if none reference expected paths, still prefer the first non-empty diffstat.
+                            for (const strip of stripCandidates) {
+                                try {
+                                    const stat = await this.executeGitCommandResult(
+                                        ['apply', `-p${strip}`, '--stat', '-'],
+                                        originalRootShellPath,
+                                        [0, 1],
+                                        patchContent
+                                    );
+                                    const statOut = stat.output.trim();
+                                    if (
+                                        stat.exitCode === 0 &&
+                                        statOut &&
+                                        statOut !== '0 files changed'
+                                    ) {
+                                        return strip;
+                                    }
+                                } catch {
+                                    // ignore
+                                }
+                            }
+
+                            return preferredStrip;
+                        };
+
+                        steps.detail('Detecting strip level');
+                        const stripLevel = await detectStripLevel();
+                        this.logger.info('diffPatch: selected git apply strip level', {
+                            stripLevel,
+                            stripCandidates,
+                            preferredStrip
+                        });
+
+                        // Show how git interprets the patch paths/stat.
                         try {
                             const stat = await this.executeGitCommandResult(
-                                ['apply', `-p${strip}`, '--stat', '-'],
+                                ['apply', `-p${stripLevel}`, '--stat', '-'],
                                 originalRootShellPath,
                                 [0, 1],
                                 patchContent
                             );
-                            const statOut = stat.output.trim();
-
-                            // Heuristic: choose the first strip level that produces a non-empty diffstat
-                            // and references at least one expected path.
-                            if (
-                                stat.exitCode === 0 &&
-                                statOut &&
-                                statOut !== '0 files changed' &&
-                                expectedPaths.some(p => statOut.includes(p))
-                            ) {
-                                return strip;
-                            }
-                        } catch {
-                            // ignore
+                            this.logger.info('diffPatch: git apply --stat', {
+                                exitCode: stat.exitCode,
+                                output: stat.output.trim()
+                            });
+                        } catch (e) {
+                            this.logger.warn('diffPatch: git apply --stat failed', {
+                                error: e instanceof Error ? e.message : String(e)
+                            });
                         }
-                    }
 
-                    // Fallback: if none reference expected paths, still prefer the first non-empty diffstat.
-                    for (const strip of stripCandidates) {
+                        const hashInTree = async (
+                            treeCwd: string,
+                            relPath: string
+                        ): Promise<string | undefined> => {
+                            try {
+                                const out = await this.executeGitCommand(
+                                    ['hash-object', relPath],
+                                    treeCwd
+                                );
+                                return out.trim() || undefined;
+                            } catch {
+                                return undefined;
+                            }
+                        };
+
+                        const logTreeHashes = async (label: string, treeCwd: string) => {
+                            const hashes: Array<{ path: string; hash?: string }> = [];
+                            for (const edit of fileEdits) {
+                                if (edit.status === 'deleted') {
+                                    continue;
+                                }
+                                const p = edit.status === 'added' ? edit.newPath : edit.oldPath;
+                                hashes.push({ path: p, hash: await hashInTree(treeCwd, p) });
+                            }
+                            this.logger.info(label, { treeCwd, hashes });
+                        };
+
+                        // Preflight checks on original/ (based on baseline content).
+                        // - `--check` exit 0 => can apply cleanly (but does not apply)
+                        // - `--reverse --check` exit 0 => patch appears already applied to this base
+                        let reverseCheckExitCode = 1;
                         try {
-                            const stat = await this.executeGitCommandResult(
-                                ['apply', `-p${strip}`, '--stat', '-'],
+                            const check = await this.executeGitCommandResult(
+                                ['apply', `-p${stripLevel}`, '--check', '--whitespace=nowarn', '-'],
                                 originalRootShellPath,
                                 [0, 1],
                                 patchContent
                             );
-                            const statOut = stat.output.trim();
-                            if (stat.exitCode === 0 && statOut && statOut !== '0 files changed') {
-                                return strip;
+                            this.logger.info('diffPatch: git apply --check', {
+                                exitCode: check.exitCode,
+                                output: check.output.trim()
+                            });
+
+                            const reverseCheck = await this.executeGitCommandResult(
+                                [
+                                    'apply',
+                                    `-p${stripLevel}`,
+                                    '--reverse',
+                                    '--check',
+                                    '--whitespace=nowarn',
+                                    '-'
+                                ],
+                                originalRootShellPath,
+                                [0, 1],
+                                patchContent
+                            );
+                            reverseCheckExitCode = reverseCheck.exitCode;
+                            this.logger.info('diffPatch: git apply --reverse --check', {
+                                exitCode: reverseCheck.exitCode,
+                                output: reverseCheck.output.trim()
+                            });
+                        } catch (e) {
+                            this.logger.warn('diffPatch: preflight checks failed', {
+                                error: e instanceof Error ? e.message : String(e)
+                            });
+                        }
+
+                        // If the patch appears already applied to the baseline, we want to show
+                        // the patch content anyway. Do this by reverse-applying into original/ to get the
+                        // pre-patch baseline, then apply forward into patched/.
+                        if (reverseCheckExitCode === 0) {
+                            this.logger.info(
+                                'diffPatch: patch appears already applied; generating baseline by reverse-applying into original'
+                            );
+                            await logTreeHashes(
+                                'diffPatch: original hashes (pre reverse-apply)',
+                                originalRootShellPath
+                            );
+                            try {
+                                const reverseApply = await this.executeGitCommandResult(
+                                    [
+                                        'apply',
+                                        `-p${stripLevel}`,
+                                        '--reverse',
+                                        '--verbose',
+                                        '--whitespace=nowarn',
+                                        '-'
+                                    ],
+                                    originalRootShellPath,
+                                    [0, 1],
+                                    patchContent
+                                );
+                                const trimmed = reverseApply.output.trim();
+                                this.logger.info('diffPatch: git apply --reverse --verbose', {
+                                    exitCode: reverseApply.exitCode,
+                                    output: trimmed
+                                });
+                                if (isSkippedOutput(trimmed)) {
+                                    this.logger.warn('diffPatch: reverse-apply skipped patches', {
+                                        stripLevel,
+                                        output: trimmed
+                                    });
+                                }
+                            } catch (e) {
+                                this.logger.warn(
+                                    'diffPatch: reverse-apply baseline failed; falling back to direct apply',
+                                    { error: e instanceof Error ? e.message : String(e) }
+                                );
                             }
-                        } catch {
-                            // ignore
+                            await logTreeHashes(
+                                'diffPatch: original hashes (post reverse-apply)',
+                                originalRootShellPath
+                            );
+                        }
+
+                        // Copy original/ -> patched/ (only the impacted files) so the forward apply happens from the baseline.
+                        for (const edit of fileEdits) {
+                            const baselineRelPath =
+                                edit.status === 'added' ? edit.newPath : edit.oldPath;
+                            const baselineUri = this.joinUriPath(originalRootUri, baselineRelPath);
+
+                            // For deletes, the file may not exist in the baseline; that's fine.
+                            let baselineBytes: Uint8Array | undefined;
+                            try {
+                                baselineBytes = await vscode.workspace.fs.readFile(baselineUri);
+                            } catch {
+                                baselineBytes = undefined;
+                            }
+
+                            // Write baseline into patched tree at the old path location so renames/deletes apply cleanly.
+                            const patchedBaseUri = this.joinUriPath(patchedRootUri, edit.oldPath);
+                            await this.ensureParentDirectory(patchedBaseUri);
+                            await vscode.workspace.fs.writeFile(
+                                patchedBaseUri,
+                                baselineBytes ?? encoder.encode('')
+                            );
+
+                            // Ensure directories for the final path exist.
+                            const finalRelPath =
+                                edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+                            await this.ensureParentDirectory(
+                                this.joinUriPath(patchedRootUri, finalRelPath)
+                            );
+                        }
+
+                        // Apply patch inside patched/.
+                        try {
+                            await logTreeHashes(
+                                'diffPatch: patched hashes (pre apply)',
+                                patchedRootShellPath
+                            );
+                            const apply = await this.executeGitCommandResult(
+                                [
+                                    'apply',
+                                    `-p${stripLevel}`,
+                                    '--verbose',
+                                    '--whitespace=nowarn',
+                                    '-'
+                                ],
+                                patchedRootShellPath,
+                                [0, 1],
+                                patchContent
+                            );
+                            const trimmed = apply.output.trim();
+                            this.logger.info('diffPatch: git apply --verbose', {
+                                exitCode: apply.exitCode,
+                                output: trimmed
+                            });
+                            if (isSkippedOutput(trimmed)) {
+                                this.logger.warn('diffPatch: apply skipped patches', {
+                                    stripLevel,
+                                    output: trimmed
+                                });
+                            }
+                            await logTreeHashes(
+                                'diffPatch: patched hashes (post apply)',
+                                patchedRootShellPath
+                            );
+                        } catch (error: any) {
+                            // Try a best-effort preview by allowing rejects so we can still show partial diffs.
+                            try {
+                                await this.executeGitCommandResult(
+                                    [
+                                        'apply',
+                                        `-p${stripLevel}`,
+                                        '--reject',
+                                        '--whitespace=nowarn',
+                                        '-'
+                                    ],
+                                    patchedRootShellPath,
+                                    [0, 1],
+                                    patchContent
+                                );
+                                vscode.window.showWarningMessage(
+                                    'Patch did not apply cleanly; showing best-effort diff preview with rejects.'
+                                );
+                            } catch {
+                                vscode.window.showErrorMessage(
+                                    `Failed to apply patch for diff preview: ${error.message || error}`
+                                );
+                                return;
+                            }
                         }
                     }
-
-                    return preferredStrip;
-                };
-
-                steps.detail('Detecting strip level');
-                const stripLevel = await detectStripLevel();
-                this.logger.info('diffPatch: selected git apply strip level', { stripLevel, stripCandidates, preferredStrip });
-
-                // Show how git interprets the patch paths/stat.
-                try {
-                    const stat = await this.executeGitCommandResult(['apply', `-p${stripLevel}`, '--stat', '-'], originalRootShellPath, [0, 1], patchContent);
-                    this.logger.info('diffPatch: git apply --stat', { exitCode: stat.exitCode, output: stat.output.trim() });
-                } catch (e) {
-                    this.logger.warn('diffPatch: git apply --stat failed', { error: e instanceof Error ? e.message : String(e) });
-                }
-
-            const hashInTree = async (treeCwd: string, relPath: string): Promise<string | undefined> => {
-                try {
-                    const out = await this.executeGitCommand(['hash-object', relPath], treeCwd);
-                    return out.trim() || undefined;
-                } catch {
-                    return undefined;
-                }
-            };
-
-            const logTreeHashes = async (label: string, treeCwd: string) => {
-                const hashes: Array<{ path: string; hash?: string }> = [];
-                for (const edit of fileEdits) {
-                    if (edit.status === 'deleted') {
-                        continue;
-                    }
-                    const p = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                    hashes.push({ path: p, hash: await hashInTree(treeCwd, p) });
-                }
-                this.logger.info(label, { treeCwd, hashes });
-            };
-
-                // Preflight checks on original/ (based on baseline content).
-                // - `--check` exit 0 => can apply cleanly (but does not apply)
-                // - `--reverse --check` exit 0 => patch appears already applied to this base
-                let reverseCheckExitCode = 1;
-                try {
-                    const check = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--check', '--whitespace=nowarn', '-'],
-                        originalRootShellPath,
-                        [0, 1],
-                        patchContent
-                    );
-                    this.logger.info('diffPatch: git apply --check', { exitCode: check.exitCode, output: check.output.trim() });
-
-                    const reverseCheck = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--reverse', '--check', '--whitespace=nowarn', '-'],
-                        originalRootShellPath,
-                        [0, 1],
-                        patchContent
-                    );
-                    reverseCheckExitCode = reverseCheck.exitCode;
-                    this.logger.info('diffPatch: git apply --reverse --check', { exitCode: reverseCheck.exitCode, output: reverseCheck.output.trim() });
-                } catch (e) {
-                    this.logger.warn('diffPatch: preflight checks failed', { error: e instanceof Error ? e.message : String(e) });
-                }
-
-                // If the patch appears already applied to the baseline, we want to show
-                // the patch content anyway. Do this by reverse-applying into original/ to get the
-                // pre-patch baseline, then apply forward into patched/.
-                if (reverseCheckExitCode === 0) {
-                    this.logger.info('diffPatch: patch appears already applied; generating baseline by reverse-applying into original');
-                    await logTreeHashes('diffPatch: original hashes (pre reverse-apply)', originalRootShellPath);
-                    try {
-                        const reverseApply = await this.executeGitCommandResult(
-                            ['apply', `-p${stripLevel}`, '--reverse', '--verbose', '--whitespace=nowarn', '-'],
-                            originalRootShellPath,
-                            [0, 1],
-                            patchContent
-                        );
-                        const trimmed = reverseApply.output.trim();
-                        this.logger.info('diffPatch: git apply --reverse --verbose', { exitCode: reverseApply.exitCode, output: trimmed });
-                        if (isSkippedOutput(trimmed)) {
-                            this.logger.warn('diffPatch: reverse-apply skipped patches', { stripLevel, output: trimmed });
-                        }
-                    } catch (e) {
-                        this.logger.warn('diffPatch: reverse-apply baseline failed; falling back to direct apply', { error: e instanceof Error ? e.message : String(e) });
-                    }
-                    await logTreeHashes('diffPatch: original hashes (post reverse-apply)', originalRootShellPath);
-                }
-
-                // Copy original/ -> patched/ (only the impacted files) so the forward apply happens from the baseline.
-                for (const edit of fileEdits) {
-                    const baselineRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                    const baselineUri = this.joinUriPath(originalRootUri, baselineRelPath);
-
-                    // For deletes, the file may not exist in the baseline; that's fine.
-                    let baselineBytes: Uint8Array | undefined;
-                    try {
-                        baselineBytes = await vscode.workspace.fs.readFile(baselineUri);
-                    } catch {
-                        baselineBytes = undefined;
-                    }
-
-                    // Write baseline into patched tree at the old path location so renames/deletes apply cleanly.
-                    const patchedBaseUri = this.joinUriPath(patchedRootUri, edit.oldPath);
-                    await this.ensureParentDirectory(patchedBaseUri);
-                    await vscode.workspace.fs.writeFile(patchedBaseUri, baselineBytes ?? encoder.encode(''));
-
-                    // Ensure directories for the final path exist.
-                    const finalRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
-                    await this.ensureParentDirectory(this.joinUriPath(patchedRootUri, finalRelPath));
-                }
-
-                // Apply patch inside patched/.
-                try {
-                    await logTreeHashes('diffPatch: patched hashes (pre apply)', patchedRootShellPath);
-                    const apply = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--verbose', '--whitespace=nowarn', '-'],
-                        patchedRootShellPath,
-                        [0, 1],
-                        patchContent
-                    );
-                    const trimmed = apply.output.trim();
-                    this.logger.info('diffPatch: git apply --verbose', { exitCode: apply.exitCode, output: trimmed });
-                    if (isSkippedOutput(trimmed)) {
-                        this.logger.warn('diffPatch: apply skipped patches', { stripLevel, output: trimmed });
-                    }
-                    await logTreeHashes('diffPatch: patched hashes (post apply)', patchedRootShellPath);
-                } catch (error: any) {
-                    // Try a best-effort preview by allowing rejects so we can still show partial diffs.
-                    try {
-                        await this.executeGitCommandResult(
-                            ['apply', `-p${stripLevel}`, '--reject', '--whitespace=nowarn', '-'],
-                            patchedRootShellPath,
-                            [0, 1],
-                            patchContent
-                        );
-                        vscode.window.showWarningMessage('Patch did not apply cleanly; showing best-effort diff preview with rejects.');
-                    } catch {
-                        vscode.window.showErrorMessage(`Failed to apply patch for diff preview: ${error.message || error}`);
-                        return;
-                    }
-                }
-            }
 
                     steps.next('Verify preview has changes');
 
-                // If the patched preview tree produced no differences, avoid opening empty diffs.
-            // This commonly happens when all hunks were rejected or the patch is already applied.
-            let hasAnyDiff = false;
-            const diffSummary: Array<{ path: string; changed: boolean; leftBytes?: number; rightBytes?: number }> = [];
-            for (const edit of fileEdits) {
-                const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                const rightRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
-                const leftUri = this.joinUriPath(originalRootUri, leftRelPath);
-                const rightUri = this.joinUriPath(patchedRootUri, rightRelPath);
+                    // If the patched preview tree produced no differences, avoid opening empty diffs.
+                    // This commonly happens when all hunks were rejected or the patch is already applied.
+                    let hasAnyDiff = false;
+                    const diffSummary: Array<{
+                        path: string;
+                        changed: boolean;
+                        leftBytes?: number;
+                        rightBytes?: number;
+                    }> = [];
+                    for (const edit of fileEdits) {
+                        const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
+                        const rightRelPath =
+                            edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+                        const leftUri = this.joinUriPath(originalRootUri, leftRelPath);
+                        const rightUri = this.joinUriPath(patchedRootUri, rightRelPath);
 
-                try {
-                    const leftBytes = await vscode.workspace.fs.readFile(leftUri);
-                    let rightBytes: Uint8Array;
-                    try {
-                        rightBytes = await vscode.workspace.fs.readFile(rightUri);
-                    } catch {
-                        rightBytes = encoder.encode('');
-                    }
+                        try {
+                            const leftBytes = await vscode.workspace.fs.readFile(leftUri);
+                            let rightBytes: Uint8Array;
+                            try {
+                                rightBytes = await vscode.workspace.fs.readFile(rightUri);
+                            } catch {
+                                rightBytes = encoder.encode('');
+                            }
 
-                    if (leftBytes.length !== rightBytes.length) {
-                        hasAnyDiff = true;
-                        diffSummary.push({ path: rightRelPath, changed: true, leftBytes: leftBytes.length, rightBytes: rightBytes.length });
-                        break;
-                    }
-                    for (let i = 0; i < leftBytes.length; i++) {
-                        if (leftBytes[i] !== rightBytes[i]) {
+                            if (leftBytes.length !== rightBytes.length) {
+                                hasAnyDiff = true;
+                                diffSummary.push({
+                                    path: rightRelPath,
+                                    changed: true,
+                                    leftBytes: leftBytes.length,
+                                    rightBytes: rightBytes.length
+                                });
+                                break;
+                            }
+                            for (let i = 0; i < leftBytes.length; i++) {
+                                if (leftBytes[i] !== rightBytes[i]) {
+                                    hasAnyDiff = true;
+                                    diffSummary.push({
+                                        path: rightRelPath,
+                                        changed: true,
+                                        leftBytes: leftBytes.length,
+                                        rightBytes: rightBytes.length
+                                    });
+                                    break;
+                                }
+                            }
+                            if (hasAnyDiff) {
+                                break;
+                            }
+
+                            diffSummary.push({
+                                path: rightRelPath,
+                                changed: false,
+                                leftBytes: leftBytes.length,
+                                rightBytes: rightBytes.length
+                            });
+                        } catch {
+                            // If we can't read one side, still try opening diffs below.
                             hasAnyDiff = true;
-                            diffSummary.push({ path: rightRelPath, changed: true, leftBytes: leftBytes.length, rightBytes: rightBytes.length });
+                            diffSummary.push({ path: rightRelPath, changed: true });
                             break;
                         }
                     }
-                    if (hasAnyDiff) {
-                        break;
+
+                    if (!hasAnyDiff) {
+                        this.logger.warn('diffPatch: preview produced no diffs', {
+                            patchFile,
+                            sourceDir,
+                            fileEdits,
+                            diffSummary
+                        });
+                        vscode.window.showWarningMessage(
+                            'Patch preview produced no differences. The patch may already be applied, or all hunks were rejected in this workspace.'
+                        );
+                        return;
                     }
-
-                    diffSummary.push({ path: rightRelPath, changed: false, leftBytes: leftBytes.length, rightBytes: rightBytes.length });
-                } catch {
-                    // If we can't read one side, still try opening diffs below.
-                    hasAnyDiff = true;
-                    diffSummary.push({ path: rightRelPath, changed: true });
-                    break;
-                }
-            }
-
-            if (!hasAnyDiff) {
-                this.logger.warn('diffPatch: preview produced no diffs', { patchFile, sourceDir, fileEdits, diffSummary });
-                vscode.window.showWarningMessage('Patch preview produced no differences. The patch may already be applied, or all hunks were rejected in this workspace.');
-                return;
-            }
 
                     steps.next('Open diff editors');
                     steps.detail(`0/${fileEdits.length} files`);
 
-            // Open diffs for all impacted files.
-            for (let i = 0; i < fileEdits.length; i++) {
-                const edit = fileEdits[i];
-                if (i === 0 || i % 5 === 0 || i === fileEdits.length - 1) {
-                    steps.detail(`${Math.min(i, fileEdits.length)}/${fileEdits.length} files`);
-                }
-                const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
-                const rightRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
+                    // Open diffs for all impacted files.
+                    for (let i = 0; i < fileEdits.length; i++) {
+                        const edit = fileEdits[i];
+                        if (i === 0 || i % 5 === 0 || i === fileEdits.length - 1) {
+                            steps.detail(
+                                `${Math.min(i, fileEdits.length)}/${fileEdits.length} files`
+                            );
+                        }
+                        const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
+                        const rightRelPath =
+                            edit.status === 'deleted' ? edit.oldPath : edit.newPath;
 
-                const leftUri = this.joinUriPath(originalRootUri, leftRelPath);
-                const rightUri = this.joinUriPath(patchedRootUri, rightRelPath);
+                        const leftUri = this.joinUriPath(originalRootUri, leftRelPath);
+                        const rightUri = this.joinUriPath(patchedRootUri, rightRelPath);
 
-                // If a file was deleted, the patched version may not exist anymore.
-                // Create an empty placeholder so the diff editor can open.
-                if (edit.status === 'deleted') {
-                    try {
-                        await vscode.workspace.fs.stat(rightUri);
-                    } catch {
-                        await createEmpty(rightUri);
+                        // If a file was deleted, the patched version may not exist anymore.
+                        // Create an empty placeholder so the diff editor can open.
+                        if (edit.status === 'deleted') {
+                            try {
+                                await vscode.workspace.fs.stat(rightUri);
+                            } catch {
+                                await createEmpty(rightUri);
+                            }
+                        }
+
+                        const title = `Diff: ${rightRelPath} (${patchFile})`;
+                        await vscode.commands.executeCommand(
+                            'vscode.diff',
+                            leftUri,
+                            rightUri,
+                            title,
+                            {
+                                preview: false,
+                                preserveFocus: true
+                            }
+                        );
                     }
-                }
-
-                const title = `Diff: ${rightRelPath} (${patchFile})`;
-                await vscode.commands.executeCommand('vscode.diff', leftUri, rightUri, title, {
-                    preview: false,
-                    preserveFocus: true
-                });
-            }
                     steps.detail(`${fileEdits.length}/${fileEdits.length} files`);
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('diffPatch threw', { error: errorMessage });
-            vscode.window.showErrorMessage(`Error diffing patch: ${errorMessage}`);
-        }
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    this.logger.error('diffPatch threw', { error: errorMessage });
+                    vscode.window.showErrorMessage(`Error diffing patch: ${errorMessage}`);
+                }
             }
         });
     }
@@ -1330,7 +1679,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             return decoder.decode(patchBytes);
         } catch (error: any) {
             // If vscode-local fails and we were using it, try regular file scheme as fallback
-            if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
+            if (
+                useVscodeLocal &&
+                (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))
+            ) {
                 const patchUri = vscode.Uri.file(path.join(destPath, patchFile));
                 const patchBytes = await vscode.workspace.fs.readFile(patchUri);
                 return decoder.decode(patchBytes);
@@ -1359,7 +1711,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 patchUri = await this.getLocalFileUri(path.join(destPath, patchFile));
                 await vscode.workspace.fs.stat(patchUri);
             } catch (error: any) {
-                if (useVscodeLocal && (error?.code === 'ENOPRO' || error?.message?.includes('No file system provider'))) {
+                if (
+                    useVscodeLocal &&
+                    (error?.code === 'ENOPRO' ||
+                        error?.message?.includes('No file system provider'))
+                ) {
                     patchUri = vscode.Uri.file(path.join(destPath, patchFile));
                     await vscode.workspace.fs.stat(patchUri);
                 } else {
@@ -1401,17 +1757,17 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     private async ensureParentDirectory(fileUri: vscode.Uri): Promise<void> {
         // joinPath(..., '..') does not reliably compute parents across URI schemes.
         // Compute the directory using the appropriate path semantics.
-        const parentUri = fileUri.scheme === 'file'
-            ? vscode.Uri.file(path.dirname(fileUri.fsPath))
-            : fileUri.with({ path: path.posix.dirname(fileUri.path) });
+        const parentUri =
+            fileUri.scheme === 'file'
+                ? vscode.Uri.file(path.dirname(fileUri.fsPath))
+                : fileUri.with({ path: path.posix.dirname(fileUri.path) });
         await vscode.workspace.fs.createDirectory(parentUri);
     }
-
 
     private _getHtmlForWebview(webview: vscode.Webview) {
         // Use nonce for security and cache busting
         const nonce = this.getNonce();
-        
+
         return `<!DOCTYPE html>
 <html lang="en">
 <head>

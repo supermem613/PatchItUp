@@ -7,7 +7,12 @@ const getVscode = (): typeof vscodeType => {
     return require('vscode');
 };
 
-export function formatStepMessage(step: number, totalSteps: number, intent: string, detail?: string): string {
+export function formatStepMessage(
+    step: number,
+    totalSteps: number,
+    intent: string,
+    detail?: string
+): string {
     const boundedStep = Math.max(1, Math.min(step, totalSteps));
     const base = `Step ${boundedStep}/${totalSteps}: ${intent}`;
     return detail ? `${base} — ${detail}` : base;
@@ -60,7 +65,12 @@ export async function withStepProgress<T>(params: {
                 },
                 detail: (detail: string) => {
                     const stepToShow = currentStep > 0 ? currentStep : 1;
-                    const msg = formatStepMessage(stepToShow, totalSteps, currentIntent || 'Working', detail);
+                    const msg = formatStepMessage(
+                        stepToShow,
+                        totalSteps,
+                        currentIntent || 'Working',
+                        detail
+                    );
                     progress.report({ message: msg });
                     status.text = `${title}: ${msg}`;
                 }
