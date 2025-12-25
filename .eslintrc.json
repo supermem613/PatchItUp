@@ -1,15 +1,11 @@
 {
-  "root": true,
-  "parser": "@typescript-eslint/parser",
-  "plugins": ["@typescript-eslint"],
-  "parserOptions": {
-    "ecmaVersion": 2020,
-    "sourceType": "module"
-  },
-  "ignorePatterns": [
-    "out/**",
-    "node_modules/**",
-    "_debug/**"
-  ],
-  "rules": {}
+    "root": true,
+    "parser": "@typescript-eslint/parser",
+    "plugins": ["@typescript-eslint"],
+    "parserOptions": {
+        "ecmaVersion": 2020,
+        "sourceType": "module"
+    },
+    "ignorePatterns": ["out/**", "node_modules/**", "_debug/**"],
+    "rules": {}
 }

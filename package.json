@@ -1,103 +1,106 @@
 {
-  "name": "patchitup",
-  "displayName": "PatchItUp",
-  "description": "Create and apply git patches for local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes with an intuitive sidebar UI",
-  "version": "0.0.6",
-  "publisher": "supermem613",
-  "license": "MIT",
-  "icon": "images/icon.png",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/supermem613/PatchItUp.git"
-  },
-  "engines": {
-    "vscode": "^1.85.0"
-  },
-  "categories": [
-    "Other"
-  ],
-  "extensionKind": [
-    "ui",
-    "workspace"
-  ],
-  "main": "./out/extension.js",
-  "contributes": {
-    "commands": [
-      {
-        "command": "patchitup.createPatch",
-        "title": "PatchItUp: Create and Save Patch"
-      },
-      {
-        "command": "patchitup.showPanel",
-        "title": "PatchItUp: Open Panel",
-        "icon": "$(diff)"
-      },
-      {
-        "command": "patchitup.applyPatch",
-        "title": "PatchItUp: Apply Patch"
-      },
-      {
-        "command": "patchitup.showLogs",
-        "title": "PatchItUp: Show Logs",
-        "icon": "$(output)"
-      }
+    "name": "patchitup",
+    "displayName": "PatchItUp",
+    "description": "Create and apply git patches for local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes with an intuitive sidebar UI",
+    "version": "0.0.6",
+    "publisher": "supermem613",
+    "license": "MIT",
+    "icon": "images/icon.png",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/supermem613/PatchItUp.git"
+    },
+    "engines": {
+        "vscode": "^1.85.0"
+    },
+    "categories": [
+        "Other"
     ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "patchitup-panel",
-          "title": "PatchItUp",
-          "icon": "images/icon.svg"
-        }
-      ]
-    },
-    "views": {
-      "patchitup-panel": [
-        {
-          "type": "webview",
-          "id": "patchitup.panelView",
-          "name": "Patch Manager",
-          "icon": "$(diff)"
-        }
-      ]
-    },
-    "configuration": {
-      "title": "PatchItUp",
-      "properties": {
-        "patchitup.sourceDirectory": {
-          "type": "string",
-          "default": "/tmp",
-          "description": "Directory to create the patch from"
+    "extensionKind": [
+        "ui",
+        "workspace"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "patchitup.createPatch",
+                "title": "PatchItUp: Create and Save Patch"
+            },
+            {
+                "command": "patchitup.showPanel",
+                "title": "PatchItUp: Open Panel",
+                "icon": "$(diff)"
+            },
+            {
+                "command": "patchitup.applyPatch",
+                "title": "PatchItUp: Apply Patch"
+            },
+            {
+                "command": "patchitup.showLogs",
+                "title": "PatchItUp: Show Logs",
+                "icon": "$(output)"
+            }
+        ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "patchitup-panel",
+                    "title": "PatchItUp",
+                    "icon": "images/icon.svg"
+                }
+            ]
         },
-        "patchitup.projectName": {
-          "type": "string",
-          "default": "project",
-          "description": "Project name to prefix patch files"
+        "views": {
+            "patchitup-panel": [
+                {
+                    "type": "webview",
+                    "id": "patchitup.panelView",
+                    "name": "Patch Manager",
+                    "icon": "$(diff)"
+                }
+            ]
         },
-        "patchitup.destinationPath": {
-          "type": "string",
-          "default": "",
-          "description": "Local path on host machine to save patches (e.g., C:\\Users\\YourName\\patches)"
+        "configuration": {
+            "title": "PatchItUp",
+            "properties": {
+                "patchitup.sourceDirectory": {
+                    "type": "string",
+                    "default": "/tmp",
+                    "description": "Directory to create the patch from"
+                },
+                "patchitup.projectName": {
+                    "type": "string",
+                    "default": "project",
+                    "description": "Project name to prefix patch files"
+                },
+                "patchitup.destinationPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Local path on host machine to save patches (e.g., C:\\Users\\YourName\\patches)"
+                }
+            }
         }
-      }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src --ext ts",
+        "test": "node ./out/test/runTest.js"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.85.0",
+        "@types/node": "18.x",
+        "@types/mocha": "^10.0.10",
+        "@typescript-eslint/eslint-plugin": "^6.13.0",
+        "@typescript-eslint/parser": "^6.13.0",
+        "eslint": "^8.54.0",
+        "mocha": "^10.8.2",
+        "prettier": "^3.5.1",
+        "typescript": "^5.3.2"
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
-    "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
-  },
-  "devDependencies": {
-    "@types/vscode": "^1.85.0",
-    "@types/node": "18.x",
-    "@types/mocha": "^10.0.10",
-    "@typescript-eslint/eslint-plugin": "^6.13.0",
-    "@typescript-eslint/parser": "^6.13.0",
-    "eslint": "^8.54.0",
-    "mocha": "^10.8.2",
-    "typescript": "^5.3.2"
-  }
 }
