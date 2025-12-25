@@ -2,7 +2,7 @@
   "name": "patchitup",
   "displayName": "PatchItUp",
   "description": "Create and apply git patches for local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes with an intuitive sidebar UI",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "supermem613",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -35,6 +35,11 @@
       {
         "command": "patchitup.applyPatch",
         "title": "PatchItUp: Apply Patch"
+      },
+      {
+        "command": "patchitup.showLogs",
+        "title": "PatchItUp: Show Logs",
+        "icon": "$(output)"
       }
     ],
     "viewsContainers": {
@@ -51,7 +56,8 @@
         {
           "type": "webview",
           "id": "patchitup.panelView",
-          "name": "Patch Manager"
+          "name": "Patch Manager",
+          "icon": "$(diff)"
         }
       ]
     },

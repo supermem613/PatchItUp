@@ -172,4 +172,3 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 ## 📬 Feedback
 
 Have suggestions or found a bug? Please [open an issue](https://github.com/supermem613/PatchItUp/issues) on GitHub.
-

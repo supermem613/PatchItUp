@@ -1,13 +1,22 @@
 import * as vscode from 'vscode';
 import { PatchPanelProvider } from './patchPanel';
+import { createLogger } from './logger';
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('PatchItUp extension is now active');
+    const logger = createLogger();
+    context.subscriptions.push(logger);
+    logger.info('PatchItUp extension is now active', { remoteName: vscode.env.remoteName, uiKind: vscode.env.uiKind });
 
     // Register the webview panel provider
-    const provider = new PatchPanelProvider(context.extensionUri);
+    const provider = new PatchPanelProvider(context.extensionUri, logger);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(PatchPanelProvider.viewType, provider)
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('patchitup.showLogs', () => {
+            logger.show(true);
+        })
     );
 
     // Register command for creating patch
