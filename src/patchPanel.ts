@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
-import { spawn } from 'child_process';
 import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 import { applyUnifiedDiffToText, parseUnifiedDiffFiles, type UnifiedDiffFile } from './unifiedDiff';
 import { applyPatchWithGit, getStripCandidates, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
@@ -96,7 +95,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         return vscode.Uri.file(filePath);
     }
 
-    // Execute git command and get output via temp file
+    // Execute git command via VS Code Tasks and capture output.
     private async executeGitCommand(args: string[], cwd: string, allowedExitCodes: number[] = [0]): Promise<string> {
         const result = await this.executeGitCommandResult(args, cwd, allowedExitCodes);
         return result.output;
@@ -114,90 +113,153 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         // even if the UI host is Windows.
         const normalizedCwd = normalizeCwd(cwd, remoteName);
 
-        // IMPORTANT: Use child_process instead of VS Code Tasks to avoid opening terminals / console windows.
-        // In a remote session, the extension host runs remotely, so this still executes in the right place.
-        const timeoutMs = 30000;
-        const maxOutputBytes = 20 * 1024 * 1024;
+        // IMPORTANT: Use VS Code Tasks instead of spawning a local process.
+        // This ensures git runs in the *workspace environment* (e.g., Codespaces remote) even when
+        // the extension is running on the UI side.
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        const tempRootLocation = getTempRootLocation({
+            remoteName,
+            workspaceRootPosixPath: workspaceFolder?.uri.path,
+            osTmpDir: os.tmpdir()
+        });
+
+        let tempRootUri: vscode.Uri;
+        if (tempRootLocation.kind === 'workspace') {
+            if (!workspaceFolder) {
+                throw new Error('No workspace folder open');
+            }
+            const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
+            await vscode.workspace.fs.createDirectory(tmpDirUri);
+            tempRootUri = vscode.Uri.joinPath(workspaceFolder.uri, ...tempRootLocation.relativeSegments);
+        } else {
+            tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
+        }
+
+        const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        const runDirUri = vscode.Uri.joinPath(tempRootUri, 'git', runId);
+        await vscode.workspace.fs.createDirectory(runDirUri);
+
+        const stdoutUri = vscode.Uri.joinPath(runDirUri, 'out.txt');
+        const exitCodeUri = vscode.Uri.joinPath(runDirUri, 'code.txt');
+        const stdinUri = stdin !== undefined ? vscode.Uri.joinPath(runDirUri, 'stdin.txt') : undefined;
+
+        if (stdinUri && stdin !== undefined) {
+            await vscode.workspace.fs.writeFile(stdinUri, new TextEncoder().encode(stdin));
+        }
 
         this.logger.info('executeGitCommand', {
             cwd,
             normalizedCwd,
             remoteName,
-            args
+            args,
+            usingTasks: true,
+            runDir: runDirUri.toString()
         });
 
-        const result = await new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
-            const child = spawn('git', args, {
-                cwd: normalizedCwd,
-                windowsHide: true,
-                stdio: [stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe']
-            });
+        const useBash = vscode.env.remoteName !== undefined || process.platform !== 'win32';
 
-            if (stdin !== undefined) {
-                try {
-                    child.stdin?.write(stdin, 'utf8');
-                    child.stdin?.end();
-                } catch (e) {
-                    try {
-                        child.kill();
-                    } catch {}
-                    reject(e);
+        const quoteBash = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+        const quoteCmd = (s: string): string => `"${s.replace(/"/g, '""')}"`;
+
+        const cwdForShell = useBash ? normalizedCwd : cwd;
+        const outPath = useBash ? stdoutUri.fsPath.replace(/\\/g, '/') : stdoutUri.fsPath;
+        const codePath = useBash ? exitCodeUri.fsPath.replace(/\\/g, '/') : exitCodeUri.fsPath;
+        const inPath = stdinUri
+            ? useBash
+                ? stdinUri.fsPath.replace(/\\/g, '/')
+                : stdinUri.fsPath
+            : undefined;
+
+        const gitArgsJoined = useBash
+            ? args.map(a => quoteBash(a)).join(' ')
+            : args.map(a => quoteCmd(a)).join(' ');
+
+        let shellCommand: string;
+        let shellArgs: string[];
+
+        if (useBash) {
+            const cdPart = `cd ${quoteBash(cwdForShell)} || { echo "Failed to cd to ${cwdForShell}" > ${quoteBash(outPath)}; echo 1 > ${quoteBash(codePath)}; exit 0; }`;
+            const redirIn = inPath ? ` < ${quoteBash(inPath)}` : '';
+            const gitPart = `git ${gitArgsJoined}${redirIn} > ${quoteBash(outPath)} 2>&1; echo $? > ${quoteBash(codePath)}; exit 0`;
+            shellCommand = `bash`;
+            shellArgs = ['-lc', `${cdPart}; ${gitPart}`];
+        } else {
+            // cmd.exe is used so we can reliably use input/output redirection (<, >, 2>&1)
+            const cdPart = `cd /d ${quoteCmd(cwdForShell)}`;
+            const redirIn = inPath ? ` < ${quoteCmd(inPath)}` : '';
+            const gitPart = `git ${gitArgsJoined}${redirIn} > ${quoteCmd(outPath)} 2>&1`;
+            const codePart = `echo %ERRORLEVEL% > ${quoteCmd(codePath)}`;
+            const cmdLine = `${cdPart} && ${gitPart} & ${codePart} & exit /b 0`;
+            shellCommand = `cmd.exe`;
+            shellArgs = ['/d', '/s', '/c', cmdLine];
+        }
+
+        const taskLabel = `PatchItUp: git (${runId})`;
+        const task = new vscode.Task(
+            { type: 'shell', task: 'patchitup.git' },
+            workspaceFolder ?? vscode.TaskScope.Workspace,
+            taskLabel,
+            'PatchItUp',
+            new vscode.ShellExecution(shellCommand, shellArgs)
+        );
+        task.presentationOptions = {
+            reveal: vscode.TaskRevealKind.Never,
+            focus: false,
+            echo: false,
+            panel: vscode.TaskPanelKind.Shared,
+            showReuseMessage: false,
+            clear: false
+        };
+
+        const exec = await vscode.tasks.executeTask(task);
+
+        // Wait for task completion.
+        await new Promise<void>((resolve, reject) => {
+            const disposable = vscode.tasks.onDidEndTaskProcess((e) => {
+                if (e.execution !== exec) {
                     return;
                 }
-            }
-
-            const chunks: Buffer[] = [];
-            let total = 0;
-
-            const onData = (data: Buffer) => {
-                chunks.push(data);
-                total += data.length;
-                if (total > maxOutputBytes) {
-                    try {
-                        child.kill();
-                    } catch {}
-                    reject(new Error(`Git output exceeded ${maxOutputBytes} bytes`));
-                }
-            };
-
-            child.stdout?.on('data', onData);
-            child.stderr?.on('data', onData);
-
-            const timer = setTimeout(() => {
-                try {
-                    child.kill();
-                } catch {}
-                reject(new Error('Command timeout'));
-            }, timeoutMs);
-
-            child.on('error', (e) => {
-                clearTimeout(timer);
-                reject(e);
+                disposable.dispose();
+                resolve();
             });
 
-            child.on('close', (code) => {
-                clearTimeout(timer);
-                const combined = Buffer.concat(chunks).toString('utf8');
-
-                const exitCode = code ?? -1;
-                if (!allowedExitCodes.includes(exitCode)) {
-                    const trimmed = combined.trim();
-                    this.logger.error('executeGitCommand non-allowed exit code', { exitCode, output: trimmed });
-                    reject(new Error(`Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`));
-                    return;
-                }
-
-                if (combined.trim()) {
-                    this.logger.info('executeGitCommand.output', { exitCode, output: combined.trim() });
-                } else {
-                    this.logger.info('executeGitCommand.output', { exitCode, output: '' });
-                }
-
-                resolve({ exitCode, output: combined });
-            });
+            // If a task never starts/ends, we'll still eventually get a timeout from the caller UI.
+            // Keep this promise simple and rely on VS Code to terminate stuck tasks.
+            void disposable;
         });
 
-        return result;
+        const decoder = new TextDecoder('utf-8');
+        let output = '';
+        let exitCode = -1;
+        try {
+            const outBytes = await vscode.workspace.fs.readFile(stdoutUri);
+            output = decoder.decode(outBytes);
+        } catch {
+            output = '';
+        }
+
+        try {
+            const codeBytes = await vscode.workspace.fs.readFile(exitCodeUri);
+            const codeText = decoder.decode(codeBytes).trim();
+            const parsed = Number.parseInt(codeText, 10);
+            exitCode = Number.isFinite(parsed) ? parsed : -1;
+        } catch {
+            exitCode = -1;
+        }
+
+        if (!allowedExitCodes.includes(exitCode)) {
+            const trimmed = output.trim();
+            this.logger.error('executeGitCommand non-allowed exit code', { exitCode, output: trimmed });
+            throw new Error(`Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`);
+        }
+
+        if (output.trim()) {
+            this.logger.info('executeGitCommand.output', { exitCode, output: output.trim() });
+        } else {
+            this.logger.info('executeGitCommand.output', { exitCode, output: '' });
+        }
+
+        return { exitCode, output };
     }
 
     public resolveWebviewView(
