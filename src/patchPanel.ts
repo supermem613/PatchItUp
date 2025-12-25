@@ -24,6 +24,8 @@ import {
 } from './remoteSessionUtils';
 import { Logger } from './logger';
 import { withStepProgress } from './progressSteps';
+import { getOpenGitRepositoryRootPath, NoGitRepositoryOpenError } from './gitRepoRoot';
+import { runGitTask } from './gitTaskRunner';
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
@@ -128,172 +130,35 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         stdin?: string
     ): Promise<{ exitCode: number; output: string }> {
         const remoteName = vscode.env.remoteName;
-
-        // Normalize the cwd based on session type. In remote Linux sessions we need forward slashes
-        // even if the UI host is Windows.
         const normalizedCwd = normalizeCwd(cwd, remoteName);
-
-        // IMPORTANT: Use VS Code Tasks instead of spawning a local process.
-        // This ensures git runs in the *workspace environment* (e.g., Codespaces remote) even when
-        // the extension is running on the UI side.
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        const tempRootLocation = getTempRootLocation({
-            remoteName,
-            workspaceRootPosixPath: workspaceFolder?.uri.path,
-            osTmpDir: os.tmpdir()
-        });
-
-        let tempRootUri: vscode.Uri;
-        if (tempRootLocation.kind === 'workspace') {
-            if (!workspaceFolder) {
-                throw new Error('No workspace folder open');
-            }
-            const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
-            await vscode.workspace.fs.createDirectory(tmpDirUri);
-            tempRootUri = vscode.Uri.joinPath(
-                workspaceFolder.uri,
-                ...tempRootLocation.relativeSegments
-            );
-        } else {
-            tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
-        }
-
-        const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const runDirUri = vscode.Uri.joinPath(tempRootUri, 'git', runId);
-        await vscode.workspace.fs.createDirectory(runDirUri);
-
-        const stdoutUri = vscode.Uri.joinPath(runDirUri, 'out.txt');
-        const exitCodeUri = vscode.Uri.joinPath(runDirUri, 'code.txt');
-        const stdinUri =
-            stdin !== undefined ? vscode.Uri.joinPath(runDirUri, 'stdin.txt') : undefined;
-
-        if (stdinUri && stdin !== undefined) {
-            await vscode.workspace.fs.writeFile(stdinUri, new TextEncoder().encode(stdin));
-        }
 
         this.logger.info('executeGitCommand', {
             cwd,
             normalizedCwd,
             remoteName,
             args,
-            usingTasks: true,
-            runDir: runDirUri.toString()
+            usingTasks: true
         });
 
-        const useBash = vscode.env.remoteName !== undefined || process.platform !== 'win32';
-
-        const cwdForShell = useBash ? normalizedCwd : cwd;
-        const outPath = useBash ? stdoutUri.fsPath.replace(/\\/g, '/') : stdoutUri.fsPath;
-        const codePath = useBash ? exitCodeUri.fsPath.replace(/\\/g, '/') : exitCodeUri.fsPath;
-        const inPath = stdinUri
-            ? useBash
-                ? stdinUri.fsPath.replace(/\\/g, '/')
-                : stdinUri.fsPath
-            : undefined;
-
-        const { shellCommand, shellArgs } = buildGitShellExecution({
-            useBash,
-            cwdForShell,
+        const result = await runGitTask({
             args,
-            outPath,
-            codePath,
-            inPath
+            cwd,
+            allowedExitCodes,
+            stdin,
+            workspaceFolder
         });
 
-        const taskLabel = `PatchItUp: git (${runId})`;
-        const task = new vscode.Task(
-            { type: 'shell', task: 'patchitup.git' },
-            workspaceFolder ?? vscode.TaskScope.Workspace,
-            taskLabel,
-            'PatchItUp',
-            new vscode.ShellExecution(shellCommand, shellArgs)
-        );
-        task.presentationOptions = {
-            reveal: vscode.TaskRevealKind.Never,
-            focus: false,
-            echo: false,
-            panel: vscode.TaskPanelKind.Shared,
-            showReuseMessage: false,
-            clear: false
-        };
-
-        const exec = await vscode.tasks.executeTask(task);
-
-        // Wait for task completion.
-        await new Promise<void>((resolve, reject) => {
-            const disposable = vscode.tasks.onDidEndTaskProcess((e) => {
-                if (e.execution !== exec) {
-                    return;
-                }
-                disposable.dispose();
-                resolve();
+        if (result.output.trim()) {
+            this.logger.info('executeGitCommand.output', {
+                exitCode: result.exitCode,
+                output: result.output.trim()
             });
-
-            // If a task never starts/ends, we'll still eventually get a timeout from the caller UI.
-            // Keep this promise simple and rely on VS Code to terminate stuck tasks.
-            void disposable;
-        });
-
-        const decoder = new TextDecoder('utf-8');
-        let output = '';
-        let exitCode = -1;
-        try {
-            try {
-                const outBytes = await vscode.workspace.fs.readFile(stdoutUri);
-                output = decoder.decode(outBytes);
-            } catch {
-                output = '';
-            }
-
-            try {
-                const codeBytes = await vscode.workspace.fs.readFile(exitCodeUri);
-                const codeText = decoder.decode(codeBytes).trim();
-                const parsed = Number.parseInt(codeText, 10);
-                exitCode = Number.isFinite(parsed) ? parsed : -1;
-            } catch {
-                exitCode = -1;
-            }
-        } finally {
-            // Best-effort cleanup: each git invocation uses a unique temp root.
-            // Without cleanup, remote/workspace runs can leave behind `.patchitup-tmp/` folders.
-            try {
-                await vscode.workspace.fs.delete(tempRootUri, { recursive: true, useTrash: false });
-            } catch {
-                // ignore cleanup failures
-            }
-
-            // If we created workspace temp (`.patchitup-tmp/...`), remove the root folder if it's empty.
-            if (tempRootLocation.kind === 'workspace' && workspaceFolder) {
-                try {
-                    const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
-                    const remaining = await vscode.workspace.fs.readDirectory(tmpDirUri);
-                    if (remaining.length === 0) {
-                        await vscode.workspace.fs.delete(tmpDirUri, { recursive: true, useTrash: false });
-                    }
-                } catch {
-                    // ignore cleanup failures
-                }
-            }
-        }
-
-        if (!allowedExitCodes.includes(exitCode)) {
-            const trimmed = output.trim();
-            this.logger.error('executeGitCommand non-allowed exit code', {
-                exitCode,
-                output: trimmed
-            });
-            throw new Error(
-                `Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`
-            );
-        }
-
-        if (output.trim()) {
-            this.logger.info('executeGitCommand.output', { exitCode, output: output.trim() });
         } else {
-            this.logger.info('executeGitCommand.output', { exitCode, output: '' });
+            this.logger.info('executeGitCommand.output', { exitCode: result.exitCode, output: '' });
         }
 
-        return { exitCode, output };
+        return result;
     }
 
     public resolveWebviewView(
@@ -314,13 +179,13 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         webviewView.webview.onDidReceiveMessage(async (data) => {
             switch (data.type) {
                 case 'createPatch':
-                    await this.createPatch(data.sourceDir, data.projectName, data.destPath);
+                    await this.createPatch(data.projectName, data.destPath);
                     break;
                 case 'applyPatch':
-                    await this.applyPatch(data.patchFile, data.sourceDir);
+                    await this.applyPatch(data.patchFile);
                     break;
                 case 'diffPatch':
-                    await this.diffPatch(data.patchFile, data.sourceDir);
+                    await this.diffPatch(data.patchFile);
                     break;
                 case 'openPatch':
                     await this.openPatchForEdit(data.patchFile);
@@ -373,18 +238,29 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         if (!this._view) return;
 
         const config = vscode.workspace.getConfiguration('patchitup');
-        const sourceDirectory = config.get<string>('sourceDirectory', '/tmp');
         const projectName = config.get<string>('projectName', 'project');
         const destinationPath = config.get<string>('destinationPath', '');
 
         this._view.webview.postMessage({
             type: 'settings',
-            sourceDirectory,
             projectName,
             destinationPath
         });
 
         // Patches will be loaded asynchronously from the webview
+    }
+
+    private async getSourceDirFromOpenGitRepoOrShowError(): Promise<string | undefined> {
+        try {
+            return await getOpenGitRepositoryRootPath();
+        } catch (error) {
+            const msg =
+                error instanceof NoGitRepositoryOpenError
+                    ? error.message
+                    : `PatchItUp: Failed to resolve git repository root: ${error instanceof Error ? error.message : String(error)}`;
+            vscode.window.showErrorMessage(msg);
+            return undefined;
+        }
     }
 
     private async refreshPatchList(destPath: string) {
@@ -556,11 +432,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     // Public method that can be called from the command
-    public async createPatchFromCommand(sourceDir: string, projectName: string, destPath: string) {
-        await this.createPatch(sourceDir, projectName, destPath);
+    public async createPatchFromCommand(projectName: string, destPath: string) {
+        await this.createPatch(projectName, destPath);
     }
 
-    private async createPatch(sourceDir: string, projectName: string, destPath: string) {
+    private async createPatch(projectName: string, destPath: string) {
         await withStepProgress({
             title: 'PatchItUp: Create patch',
             totalSteps: 6,
@@ -572,9 +448,14 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
+                    const sourceDir = await this.getSourceDirFromOpenGitRepoOrShowError();
+                    if (!sourceDir) {
+                        return;
+                    }
+
                     if (!(await this.doesSourceDirectoryExist(sourceDir))) {
                         vscode.window.showErrorMessage(
-                            `Source directory does not exist: ${sourceDir}`
+                            `Git repository root directory does not exist or is not accessible: ${sourceDir}`
                         );
                         return;
                     }
@@ -682,7 +563,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async applyPatch(patchFile: string, sourceDir: string) {
+    private async applyPatch(patchFile: string) {
         await withStepProgress({
             title: 'PatchItUp: Apply patch',
             totalSteps: 5,
@@ -694,9 +575,14 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
+                    const sourceDir = await this.getSourceDirFromOpenGitRepoOrShowError();
+                    if (!sourceDir) {
+                        return;
+                    }
+
                     if (!(await this.doesSourceDirectoryExist(sourceDir))) {
                         vscode.window.showErrorMessage(
-                            `Source directory does not exist: ${sourceDir}`
+                            `Git repository root directory does not exist or is not accessible: ${sourceDir}`
                         );
                         return;
                     }
@@ -776,14 +662,21 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private async diffPatch(patchFile: string, sourceDir: string) {
+    private async diffPatch(patchFile: string) {
         if (!patchFile) {
             vscode.window.showWarningMessage('Please select a patch file');
             return;
         }
 
+        const sourceDir = await this.getSourceDirFromOpenGitRepoOrShowError();
+        if (!sourceDir) {
+            return;
+        }
+
         if (!(await this.doesSourceDirectoryExist(sourceDir))) {
-            vscode.window.showErrorMessage(`Source directory does not exist: ${sourceDir}`);
+            vscode.window.showErrorMessage(
+                `Git repository root directory does not exist or is not accessible: ${sourceDir}`
+            );
             return;
         }
 
@@ -851,20 +744,51 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     const isRemote = isRemoteSession(remoteName);
                     const normalizedSourceDir = normalizeCwd(sourceDir, remoteName);
 
-                    // Temp folder must live in the same environment where git runs.
-                    // In remote sessions, tasks execute remotely, so create temp folders under the workspace.
+                    // Prefer OS temp for diff preview trees so we don't leave `.patchitup-tmp/` folders in
+                    // the workspace (notably in Codespaces). Fall back to workspace temp only when needed.
                     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-                    const tempRootLocation = getTempRootLocation({
-                        remoteName,
-                        workspaceRootPosixPath: workspaceFolder?.uri.path,
-                        osTmpDir: os.tmpdir()
-                    });
+
+                    const shouldFallbackToWorkspaceTemp = (err: any): boolean => {
+                        const code = err?.code;
+                        const name = err?.name;
+                        const message = err?.message;
+                        return (
+                            code === 'ENOPRO' ||
+                            name === 'EntryNotFound (FileSystemError)' ||
+                            (typeof message === 'string' && message.includes('No file system provider'))
+                        );
+                    };
 
                     let tempRootUri: vscode.Uri;
-                    if (tempRootLocation.kind === 'workspace') {
-                        if (!workspaceFolder) {
-                            throw new Error('No workspace folder open');
+                    try {
+                        const tempRootLocation = getTempRootLocation({
+                            remoteName,
+                            workspaceRootPosixPath: undefined,
+                            osTmpDir: os.tmpdir()
+                        });
+
+                        // With workspaceRootPosixPath undefined, this will always be OS temp.
+                        tempRootUri = vscode.Uri.file(
+                            tempRootLocation.kind === 'os'
+                                ? tempRootLocation.absolutePath
+                                : tempRootLocation.shellPath
+                        );
+
+                        await vscode.workspace.fs.createDirectory(tempRootUri);
+                    } catch (err: any) {
+                        if (!workspaceFolder || !shouldFallbackToWorkspaceTemp(err)) {
+                            throw err;
                         }
+
+                        const tempRootLocation = getTempRootLocation({
+                            remoteName,
+                            workspaceRootPosixPath: workspaceFolder.uri.path,
+                            osTmpDir: os.tmpdir()
+                        });
+                        if (tempRootLocation.kind !== 'workspace') {
+                            throw err;
+                        }
+
                         const tmpDirUri = vscode.Uri.joinPath(
                             workspaceFolder.uri,
                             PATCHITUP_TMP_DIRNAME
@@ -874,8 +798,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                             workspaceFolder.uri,
                             ...tempRootLocation.relativeSegments
                         );
-                    } else {
-                        tempRootUri = vscode.Uri.file(tempRootLocation.absolutePath);
+                        await vscode.workspace.fs.createDirectory(tempRootUri);
                     }
 
                     const originalRootUri = vscode.Uri.joinPath(tempRootUri, 'original');
@@ -1899,10 +1822,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
     <div class="input-group">
-        <label for="sourceDir">Source Directory</label>
-        <input type="text" id="sourceDir" placeholder="/workspaces/odsp-next">
-    </div>
-    <div class="input-group">
         <label for="projectName">Project Name</label>
         <input type="text" id="projectName" placeholder="project">
     </div>
@@ -1942,7 +1861,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             const message = event.data;
             switch (message.type) {
                 case 'settings':
-                    document.getElementById('sourceDir').value = message.sourceDirectory;
                     document.getElementById('projectName').value = message.projectName;
                     document.getElementById('destPath').value = message.destinationPath;
                     // Load patches asynchronously after settings are loaded
@@ -1963,13 +1881,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         // Create patch button
         document.getElementById('createPatchBtn').addEventListener('click', () => {
-            const sourceDir = document.getElementById('sourceDir').value;
             const projectName = document.getElementById('projectName').value;
             const destPath = document.getElementById('destPath').value;
             
             vscode.postMessage({
                 type: 'createPatch',
-                sourceDir,
                 projectName,
                 destPath
             });
@@ -1991,12 +1907,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             if (!selectedPatch) {
                 return;
             }
-            const sourceDir = document.getElementById('sourceDir').value;
             
             vscode.postMessage({
                 type: 'applyPatch',
-                patchFile: selectedPatch,
-                sourceDir
+                patchFile: selectedPatch
             });
         });
 
@@ -2005,12 +1919,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             if (!selectedPatch) {
                 return;
             }
-            const sourceDir = document.getElementById('sourceDir').value;
             
             vscode.postMessage({
                 type: 'diffPatch',
-                patchFile: selectedPatch,
-                sourceDir
+                patchFile: selectedPatch
             });
         });
 
@@ -2066,15 +1978,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({
                 type: 'refreshPatches',
                 destPath: destPath
-            });
-        });
-
-        // Update settings when source directory changes
-        document.getElementById('sourceDir').addEventListener('change', (e) => {
-            vscode.postMessage({
-                type: 'updateSetting',
-                key: 'sourceDirectory',
-                value: e.target.value
             });
         });
 

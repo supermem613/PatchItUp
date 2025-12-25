@@ -26,7 +26,6 @@ export function activate(context: vscode.ExtensionContext) {
     let disposable = vscode.commands.registerCommand('patchitup.createPatch', async () => {
         // Get configuration
         const config = vscode.workspace.getConfiguration('patchitup');
-        const sourceDirectory = config.get<string>('sourceDirectory', '/tmp');
         const projectName = config.get<string>('projectName', 'project');
         const destinationPath = config.get<string>('destinationPath', '');
 
@@ -46,7 +45,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
 
         // Call the provider's createPatch method
-        await provider.createPatchFromCommand(sourceDirectory, projectName, destinationPath);
+        await provider.createPatchFromCommand(projectName, destinationPath);
     });
 
     context.subscriptions.push(disposable);
