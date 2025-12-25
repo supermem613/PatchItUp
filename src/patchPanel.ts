@@ -13,6 +13,7 @@ import {
 } from './commandPathUtils';
 import { detectIsRemoteLocalMachine, isLocalhostHostname, shouldUseVscodeLocalScheme } from './remoteSessionUtils';
 import { Logger } from './logger';
+import { withStepProgress } from './progressSteps';
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
@@ -624,14 +625,19 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     private async diffPatch(patchFile: string, sourceDir: string) {
-        try {
-            if (!patchFile) {
-                vscode.window.showWarningMessage('Please select a patch file');
-                return;
-            }
+        if (!patchFile) {
+            vscode.window.showWarningMessage('Please select a patch file');
+            return;
+        }
 
-            const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
-            this.logger.info('diffPatch: loaded patch', { patchFile, bytes: patchContent.length, sourceDir });
+        await withStepProgress({
+            title: 'PatchItUp: Diff patch',
+            totalSteps: 7,
+            task: async (steps) => {
+                try {
+                    steps.next('Load patch content');
+                    const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
+                    this.logger.info('diffPatch: loaded patch', { patchFile, bytes: patchContent.length, sourceDir });
 
             // Quick sanity stats for the patch content.
             // Helps identify cases where the patch has headers but no hunks.
@@ -651,7 +657,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             }
             this.logger.info('diffPatch: patch stats', { hunkCount, addLines, delLines });
 
-            const fileEdits = parseGitPatchFileEdits(patchContent);
+                    steps.next('Parse patch file list');
+                    const fileEdits = parseGitPatchFileEdits(patchContent);
             if (fileEdits.length === 0) {
                 vscode.window.showWarningMessage('Selected patch contains no file diffs');
                 return;
@@ -673,7 +680,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return 0;
             };
 
-            const remoteName = vscode.env.remoteName;
+                    steps.next('Prepare preview workspace');
+                    const remoteName = vscode.env.remoteName;
             const isRemote = isRemoteSession(remoteName);
             const normalizedSourceDir = normalizeCwd(sourceDir, remoteName);
 
@@ -810,9 +818,16 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return encoder.encode('');
             };
 
+                    steps.next('Materialize baseline files');
+                    steps.detail(`0/${fileEdits.length} files`);
+
             // Materialize pre-apply files into original/ using the workspace as a source.
             // We'll later copy original/ -> patched/ and apply the patch there.
-            for (const edit of fileEdits) {
+                    for (let i = 0; i < fileEdits.length; i++) {
+                        const edit = fileEdits[i];
+                        if (i === 0 || i % 5 === 0 || i === fileEdits.length - 1) {
+                            steps.detail(`${Math.min(i, fileEdits.length)}/${fileEdits.length} files`);
+                        }
                 const originalRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
                 const patchedRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
 
@@ -835,6 +850,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 await this.ensureParentDirectory(patchedFileUri);
             }
 
+                    steps.detail(`${fileEdits.length}/${fileEdits.length} files`);
+
             // Fast-path preview: if we can read both old/new blobs from the local object DB,
             // we can build an exact before/after preview without running `git apply` at all.
             // This matches the user's expectation: diff is derived from the patch's annotated
@@ -850,6 +867,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     return undefined;
                 }
             };
+
+                    steps.next('Build patched preview');
+                    steps.detail('Trying exact blob preview');
 
             let usedBlobPreview = true;
             for (const edit of fileEdits) {
@@ -884,9 +904,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             // generate the "patched" side by applying unified-diff hunks in-process.
             // This avoids relying on `git apply` (which has been observed to silently skip patches
             // in some remote environments).
-            let usedInProcessApplyPreview = false;
+                    let usedInProcessApplyPreview = false;
             if (!usedBlobPreview) {
                 try {
+                    steps.detail('Applying hunks in-process');
                     const diffFiles = parseUnifiedDiffFiles(patchContent);
 
                     const byPath = new Map<string, UnifiedDiffFile>();
@@ -963,6 +984,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             const patchedRootShellPath = patchedRootUri.scheme === 'file' ? patchedRootUri.fsPath : patchedRootUri.path;
 
             if (!usedBlobPreview && !usedInProcessApplyPreview) {
+                steps.detail('Applying patch in temp workspace');
                 // Write patch file into BOTH trees so we can apply/reverse-apply using a relative filename.
                 const tempPatchFileName = '.patchitup-diff-temp.patch';
                 const tempPatchUriOriginal = vscode.Uri.joinPath(originalRootUri, tempPatchFileName);
@@ -1024,6 +1046,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     return preferredStrip;
                 };
 
+                steps.detail('Detecting strip level');
                 const stripLevel = await detectStripLevel();
                 this.logger.info('diffPatch: selected git apply strip level', { stripLevel, stripCandidates, preferredStrip });
 
@@ -1162,7 +1185,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            // If the patched preview tree produced no differences, avoid opening empty diffs.
+                    steps.next('Verify preview has changes');
+
+                // If the patched preview tree produced no differences, avoid opening empty diffs.
             // This commonly happens when all hunks were rejected or the patch is already applied.
             let hasAnyDiff = false;
             const diffSummary: Array<{ path: string; changed: boolean; leftBytes?: number; rightBytes?: number }> = [];
@@ -1212,8 +1237,15 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
+                    steps.next('Open diff editors');
+                    steps.detail(`0/${fileEdits.length} files`);
+
             // Open diffs for all impacted files.
-            for (const edit of fileEdits) {
+            for (let i = 0; i < fileEdits.length; i++) {
+                const edit = fileEdits[i];
+                if (i === 0 || i % 5 === 0 || i === fileEdits.length - 1) {
+                    steps.detail(`${Math.min(i, fileEdits.length)}/${fileEdits.length} files`);
+                }
                 const leftRelPath = edit.status === 'added' ? edit.newPath : edit.oldPath;
                 const rightRelPath = edit.status === 'deleted' ? edit.oldPath : edit.newPath;
 
@@ -1236,11 +1268,14 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     preserveFocus: true
                 });
             }
+                    steps.detail(`${fileEdits.length}/${fileEdits.length} files`);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             this.logger.error('diffPatch threw', { error: errorMessage });
             vscode.window.showErrorMessage(`Error diffing patch: ${errorMessage}`);
         }
+            }
+        });
     }
 
     private async readPatchFromConfiguredDestination(patchFile: string): Promise<string> {
