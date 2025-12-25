@@ -257,19 +257,42 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         let output = '';
         let exitCode = -1;
         try {
-            const outBytes = await vscode.workspace.fs.readFile(stdoutUri);
-            output = decoder.decode(outBytes);
-        } catch {
-            output = '';
-        }
+            try {
+                const outBytes = await vscode.workspace.fs.readFile(stdoutUri);
+                output = decoder.decode(outBytes);
+            } catch {
+                output = '';
+            }
 
-        try {
-            const codeBytes = await vscode.workspace.fs.readFile(exitCodeUri);
-            const codeText = decoder.decode(codeBytes).trim();
-            const parsed = Number.parseInt(codeText, 10);
-            exitCode = Number.isFinite(parsed) ? parsed : -1;
-        } catch {
-            exitCode = -1;
+            try {
+                const codeBytes = await vscode.workspace.fs.readFile(exitCodeUri);
+                const codeText = decoder.decode(codeBytes).trim();
+                const parsed = Number.parseInt(codeText, 10);
+                exitCode = Number.isFinite(parsed) ? parsed : -1;
+            } catch {
+                exitCode = -1;
+            }
+        } finally {
+            // Best-effort cleanup: each git invocation uses a unique temp root.
+            // Without cleanup, remote/workspace runs can leave behind `.patchitup-tmp/` folders.
+            try {
+                await vscode.workspace.fs.delete(tempRootUri, { recursive: true, useTrash: false });
+            } catch {
+                // ignore cleanup failures
+            }
+
+            // If we created workspace temp (`.patchitup-tmp/...`), remove the root folder if it's empty.
+            if (tempRootLocation.kind === 'workspace' && workspaceFolder) {
+                try {
+                    const tmpDirUri = vscode.Uri.joinPath(workspaceFolder.uri, PATCHITUP_TMP_DIRNAME);
+                    const remaining = await vscode.workspace.fs.readDirectory(tmpDirUri);
+                    if (remaining.length === 0) {
+                        await vscode.workspace.fs.delete(tmpDirUri, { recursive: true, useTrash: false });
+                    }
+                } catch {
+                    // ignore cleanup failures
+                }
+            }
         }
 
         if (!allowedExitCodes.includes(exitCode)) {
