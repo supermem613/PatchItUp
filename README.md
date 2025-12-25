@@ -9,6 +9,7 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from u
 - **📦 Create Patches** - Generate git patches from uncommitted changes in any git repository
 - **💾 Save Patches** - Patches are saved to your configured destination path
 - **📋 Apply Patches** - Select and apply any saved patch back to your working directory
+- **🔍 Diff Patches** - Preview what a patch would change (opens diff tabs without modifying your repo)
 - **🌐 Works Everywhere** - Supports local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes
 - **🎯 Sidebar UI** - Intuitive panel in the activity bar for easy access
 - **🔄 Automatic Refresh** - Patch list updates automatically after creating new patches
@@ -49,6 +50,18 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from u
 2. Select a patch from the **Available Patches** list
 3. Click **Apply Selected Patch**
 4. The patch is applied to your source directory
+
+### Diffing (Previewing) Patches
+
+1. Open the PatchItUp panel
+2. Select a patch from the **Available Patches** list
+3. Click **Diff Selected Patch**
+4. PatchItUp creates a temporary working copy of the affected files, applies the patch there, and opens diff editors for the changed files
+
+Notes:
+- Temp location is the extension-host temp directory (`%TEMP%` on Windows, `/tmp` on Linux remotes).
+- This does **not** modify your working directory.
+- If the patch was created from a different repo/branch/history than your current `Source Directory`, PatchItUp may fall back to a best-effort preview (some hunks may be rejected).
 
 ### Command Palette
 
