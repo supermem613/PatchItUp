@@ -1828,6 +1828,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         }
         .button-container {
             display: flex;
+            gap: 6px;
             margin-top: 10px;
             margin-bottom: 15px;
         }
