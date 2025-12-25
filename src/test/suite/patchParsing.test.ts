@@ -73,6 +73,48 @@ describe('parseGitPatchFileEdits', () => {
         assert.strictEqual(edits[0].oldPath, 'old/name.txt');
         assert.strictEqual(edits[0].newPath, 'new/name.txt');
     });
+
+    it('parses multiple file headers in one patch', () => {
+        const patch = [
+            'diff --git a/a.txt b/a.txt',
+            'index 0000000..1111111 100644',
+            '--- a/a.txt',
+            '+++ b/a.txt',
+            '@@ -1,1 +1,1 @@',
+            '-old',
+            '+new',
+            'diff --git a/b.txt b/b.txt',
+            'new file mode 100644',
+            'index 000000000000..222222222222',
+            '--- /dev/null',
+            '+++ b/b.txt',
+            '@@ -0,0 +1,1 @@',
+            '+hello'
+        ].join('\n');
+
+        const edits = parseGitPatchFileEdits(patch);
+        assert.strictEqual(edits.length, 2);
+        assert.strictEqual(edits[0].oldPath, 'a.txt');
+        assert.strictEqual(edits[0].status, 'modified');
+        assert.strictEqual(edits[1].newPath, 'b.txt');
+        assert.strictEqual(edits[1].status, 'added');
+    });
+
+    it('handles CRLF patches', () => {
+        const patch = [
+            'diff --git a/foo.txt b/foo.txt',
+            'index 0123456..89abcde 100644',
+            '--- a/foo.txt',
+            '+++ b/foo.txt'
+        ].join('\r\n');
+
+        const edits = parseGitPatchFileEdits(patch);
+        assert.strictEqual(edits.length, 1);
+        assert.strictEqual(edits[0].oldPath, 'foo.txt');
+        assert.strictEqual(edits[0].newPath, 'foo.txt');
+        assert.strictEqual(edits[0].oldBlob, '0123456');
+        assert.strictEqual(edits[0].newBlob, '89abcde');
+    });
 });
 
 describe('unified diff parsing + apply', () => {
@@ -202,5 +244,70 @@ describe('unified diff parsing + apply', () => {
         assert.strictEqual(result.appliedHunks, 0);
         assert.strictEqual(result.rejectedHunks, 1);
         assert.strictEqual(result.text, original);
+    });
+
+    it('parses and applies multiple files independently', () => {
+        const patch = [
+            'diff --git a/a.txt b/a.txt',
+            '--- a/a.txt',
+            '+++ b/a.txt',
+            '@@ -1,2 +1,2 @@',
+            ' one',
+            '-two',
+            '+TWO',
+            'diff --git a/b.txt b/b.txt',
+            '--- a/b.txt',
+            '+++ b/b.txt',
+            '@@ -1,1 +1,1 @@',
+            '-x',
+            '+y'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        assert.strictEqual(files.length, 2);
+
+        const aOriginal = ['one', 'two', ''].join('\n');
+        const aResult = applyUnifiedDiffToText(aOriginal, files[0]);
+        assert.strictEqual(aResult.rejectedHunks, 0);
+        assert.strictEqual(aResult.text, ['one', 'TWO', ''].join('\n'));
+
+        const bOriginal = ['x', ''].join('\n');
+        const bResult = applyUnifiedDiffToText(bOriginal, files[1]);
+        assert.strictEqual(bResult.rejectedHunks, 0);
+        assert.strictEqual(bResult.text, ['y', ''].join('\n'));
+    });
+
+    it('ignores "\\ No newline at end of file" markers', () => {
+        const patch = [
+            'diff --git a/foo.txt b/foo.txt',
+            '--- a/foo.txt',
+            '+++ b/foo.txt',
+            '@@ -1,1 +1,1 @@',
+            '-one',
+            '+ONE',
+            '\\ No newline at end of file'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        const original = 'one';
+        const result = applyUnifiedDiffToText(original, files[0]);
+        assert.strictEqual(result.rejectedHunks, 0);
+        assert.strictEqual(result.text, 'ONE');
+    });
+
+    it('supports insertion at top of an empty file', () => {
+        const patch = [
+            'diff --git a/new.txt b/new.txt',
+            '--- a/new.txt',
+            '+++ b/new.txt',
+            '@@ -0,0 +1,2 @@',
+            '+hello',
+            '+world'
+        ].join('\n');
+
+        const files = parseUnifiedDiffFiles(patch);
+        const result = applyUnifiedDiffToText('', files[0]);
+        assert.strictEqual(result.rejectedHunks, 0);
+        assert.strictEqual(result.text, ['hello', 'world'].join('\n'));
     });
 });

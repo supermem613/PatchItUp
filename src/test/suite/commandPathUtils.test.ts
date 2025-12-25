@@ -24,11 +24,21 @@ describe('commandPathUtils', () => {
         assert.strictEqual(normalizeCwd('/home/user/repo', 'ssh-remote'), '/home/user/repo');
     });
 
+    it('normalizeCwd treats Codespaces as remote for slash normalization', () => {
+        assert.strictEqual(normalizeCwd('C:\\repo\\foo', 'codespaces'), 'C:/repo/foo');
+    });
+
 
     it('quoteShellArg only quotes when needed', () => {
         assert.strictEqual(quoteShellArg('plain'), 'plain');
         assert.strictEqual(quoteShellArg('has space'), '"has space"');
         assert.strictEqual(quoteShellArg('has"quote'), '"has\\"quote"');
+    });
+
+    it('quoteShellArg handles empty strings and tabs/newlines', () => {
+        assert.strictEqual(quoteShellArg(''), '');
+        assert.strictEqual(quoteShellArg('has\tTab'), '"has\tTab"');
+        assert.strictEqual(quoteShellArg('has\nNewline'), '"has\nNewline"');
     });
 
     it('quoteShellArgs joins args for git command', () => {
@@ -47,6 +57,18 @@ describe('commandPathUtils', () => {
         assert.strictEqual(loc.kind, 'workspace');
         assert.deepStrictEqual(loc.relativeSegments, [PATCHITUP_TMP_DIRNAME, 'out.txt']);
         assert.strictEqual(loc.shellPath, `/home/user/proj/${PATCHITUP_TMP_DIRNAME}/out.txt`);
+    });
+
+    it('getTempOutputLocation falls back to OS temp when remote but no workspace root', () => {
+        const loc = getTempOutputLocation({
+            remoteName: 'ssh-remote',
+            workspaceRootPosixPath: undefined,
+            osTmpDir: os.tmpdir(),
+            fileName: 'out.txt'
+        });
+
+        assert.strictEqual(loc.kind, 'os');
+        assert.strictEqual(loc.shellPath, path.join(os.tmpdir(), 'out.txt'));
     });
 
     it('getTempOutputLocation uses os.tmpdir for local sessions', () => {
@@ -79,5 +101,17 @@ describe('commandPathUtils', () => {
         });
         assert.strictEqual(localRoot.kind, 'os');
         assert.strictEqual(localRoot.shellPath, path.join(os.tmpdir(), 'diff-root'));
+    });
+
+    it('getTempRootLocation trims extraneous slashes when joining workspace paths', () => {
+        const root = getTempRootLocation({
+            remoteName: 'ssh-remote',
+            workspaceRootPosixPath: '/home/user/proj/',
+            osTmpDir: os.tmpdir(),
+            folderName: '/diff-root/'
+        });
+
+        assert.strictEqual(root.kind, 'workspace');
+        assert.strictEqual(root.shellPath, `/home/user/proj/${PATCHITUP_TMP_DIRNAME}/diff-root`);
     });
 });

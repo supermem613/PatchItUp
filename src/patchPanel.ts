@@ -11,6 +11,7 @@ import {
     quoteShellArgs,
     PATCHITUP_TMP_DIRNAME
 } from './commandPathUtils';
+import { detectIsRemoteLocalMachine, isLocalhostHostname, shouldUseVscodeLocalScheme } from './remoteSessionUtils';
 import { Logger } from './logger';
 
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
@@ -47,69 +48,29 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         this.logger.info('isRemoteLocalMachine: checking remote type', { remoteName });
 
-        // WSL is always on the local machine
-        if (remoteName === 'wsl') {
-            this._isRemoteLocalMachine = true;
-            this.logger.info('isRemoteLocalMachine: WSL detected, returning true');
-            return true;
-        }
+        try {
+            const hostname = os.hostname();
+            const isLocal = detectIsRemoteLocalMachine(remoteName, hostname);
+            this._isRemoteLocalMachine = isLocal;
 
-        // Dev Containers can be local or remote - check if Docker is running locally
-        if (remoteName === 'dev-container' || remoteName === 'attached-container') {
-            // Dev containers running locally typically have access to the same hostname
-            // We can check if the container's hostname resolves to localhost-like addresses
-            try {
-                const hostname = os.hostname();
-                // If we can get the hostname and it matches common local patterns, it's local
-                const isLocal = this.isLocalhostHostname(hostname);
-                this._isRemoteLocalMachine = isLocal;
+            if (remoteName === 'wsl') {
+                this.logger.info('isRemoteLocalMachine: WSL detected, returning true');
+            } else if (remoteName === 'codespaces' || remoteName === 'github-codespaces') {
+                this.logger.info('isRemoteLocalMachine: Codespaces detected, returning false');
+            } else if (remoteName === 'dev-container' || remoteName === 'attached-container') {
                 this.logger.info('isRemoteLocalMachine: Dev Container', { hostname, isLocal });
-                return isLocal;
-            } catch {
-                // If we can't determine, assume it's not local (safer default)
-                this._isRemoteLocalMachine = false;
-                return false;
-            }
-        }
-
-        // SSH could be to localhost
-        if (remoteName === 'ssh-remote') {
-            // Try to detect if SSH is to localhost by checking environment or hostname
-            try {
-                const hostname = os.hostname();
-                const isLocal = this.isLocalhostHostname(hostname);
-                this._isRemoteLocalMachine = isLocal;
+            } else if (remoteName === 'ssh-remote') {
                 this.logger.info('isRemoteLocalMachine: SSH', { hostname, isLocal });
-                return isLocal;
-            } catch {
-                this._isRemoteLocalMachine = false;
-                return false;
+            } else {
+                this.logger.info('isRemoteLocalMachine: unknown remote type, returning false', { remoteName });
             }
-        }
 
-        // Codespaces and other cloud-based remotes are never local
-        if (remoteName === 'codespaces' || remoteName === 'github-codespaces') {
+            return isLocal;
+        } catch {
+            // If we can't determine, assume it's not local (safer default)
             this._isRemoteLocalMachine = false;
-            this.logger.info('isRemoteLocalMachine: Codespaces detected, returning false');
             return false;
         }
-
-        // For unknown remote types, default to not local (safer)
-        this._isRemoteLocalMachine = false;
-        this.logger.info('isRemoteLocalMachine: unknown remote type, returning false', { remoteName });
-        return false;
-    }
-
-    /**
-     * Checks if a hostname indicates localhost
-     */
-    private isLocalhostHostname(hostname: string): boolean {
-        const lowerHostname = hostname.toLowerCase();
-        return lowerHostname === 'localhost' ||
-               lowerHostname === '127.0.0.1' ||
-               lowerHostname === '::1' ||
-               lowerHostname.endsWith('.local') ||
-               lowerHostname.startsWith('localhost');
     }
 
     /**
@@ -117,14 +78,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
      * Returns true only when running in a true remote environment (not local machine).
      */
     private async shouldUseVscodeLocalScheme(): Promise<boolean> {
-        const isRemote = vscode.env.remoteName !== undefined;
-        if (!isRemote) {
-            return false;
-        }
-        
+        const remoteName = vscode.env.remoteName;
         const isLocalMachine = await this.isRemoteLocalMachine();
-        // Use vscode-local only when remote AND not the local machine
-        return !isLocalMachine;
+        return shouldUseVscodeLocalScheme(remoteName, isLocalMachine);
     }
 
     /**
