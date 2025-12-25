@@ -436,6 +436,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         await this.createPatch(projectName, destPath);
     }
 
+    // Public method that can be called from the command
+    public async applyPatchFromCommand(patchFile: string) {
+        await this.applyPatch(patchFile);
+    }
+
     private async createPatch(projectName: string, destPath: string) {
         await withStepProgress({
             title: 'PatchItUp: Create patch',

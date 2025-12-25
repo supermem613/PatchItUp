@@ -49,6 +49,25 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(disposable);
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('patchitup.applyPatch', async (patchFile?: string) => {
+            if (!patchFile) {
+                vscode.window.showErrorMessage(
+                    'Please provide a patch filename to apply (e.g., via command argument)'
+                );
+                return;
+            }
+            await provider.applyPatchFromCommand(patchFile);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('patchitup.showPanel', async () => {
+            // Activates the PatchItUp view container in the activity bar.
+            await vscode.commands.executeCommand('workbench.view.extension.patchitup-panel');
+        })
+    );
 }
 
 export function deactivate() {}

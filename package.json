@@ -90,9 +90,12 @@
         "format:check": "prettier --check .",
         "pretest": "npm run compile && npm run lint",
         "lint": "eslint src --ext ts",
-        "test": "node ./out/test/runTest.js"
+        "test": "node ./out/test/runTest.js",
+        "pretest:e2e": "npm run compile",
+        "test:e2e": "node ./out/test/e2e/runE2eTest.js"
     },
     "devDependencies": {
+        "@vscode/test-electron": "^2.5.2",
         "@types/vscode": "^1.85.0",
         "@types/node": "18.x",
         "@types/mocha": "^10.0.10",
