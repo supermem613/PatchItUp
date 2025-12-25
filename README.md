@@ -15,7 +15,7 @@ PatchItUp is a VS Code extension that makes it easy to create git patches from u
 - **🔄 Automatic Refresh** - Patch list updates automatically after creating new patches
 - **⏰ Timestamp Names** - Patches named with project and timestamp: `projectname_YYYYMMDDHHMMSS.patch`
 - **📁 Browse Patches** - See all your patches in a sortable list (newest first)
-- **⚙️ Configurable** - Set source directory, project name, and destination path
+- **⚙️ Configurable** - Set project name and destination path
 
 ## 🖼️ Screenshots
 
@@ -28,7 +28,6 @@ _The PatchItUp panel showing configuration fields and available patches, allowin
 1. **Install the extension** in VS Code
 2. **Open the PatchItUp panel** - Click the diff icon in the activity bar (left sidebar)
 3. **Configure settings:**
-    - **Source Directory**: Your git repository path (e.g., `/workspaces/your-project` or `C:\Projects\my-app`)
     - **Project Name**: `my-project` (used in patch filenames)
     - **Destination Path**: Where to save patches (e.g., `C:\Users\YourName\patches`)
 4. **Make changes** in your repository
@@ -49,7 +48,7 @@ _The PatchItUp panel showing configuration fields and available patches, allowin
 1. Open the PatchItUp panel
 2. Select a patch from the **Available Patches** list
 3. Click **Apply Selected Patch**
-4. The patch is applied to your source directory
+4. The patch is applied to the git repository you currently have open in VS Code
 
 ### Diffing (Previewing) Patches
 
@@ -62,7 +61,7 @@ Notes:
 
 - Temp location is the extension-host temp directory (`%TEMP%` on Windows, `/tmp` on Linux remotes).
 - This does **not** modify your working directory.
-- If the patch was created from a different repo/branch/history than your current `Source Directory`, PatchItUp may fall back to a best-effort preview (some hunks may be rejected).
+- If the patch was created from a different repo/branch/history than your current open repository, PatchItUp may fall back to a best-effort preview (some hunks may be rejected).
 
 ### Editing Patch Files
 
@@ -78,15 +77,6 @@ You can also use the command palette (Ctrl+Shift+P):
 ## ⚙️ Configuration
 
 Configure the extension in VS Code settings (File > Preferences > Settings):
-
-### `patchitup.sourceDirectory`
-
-- **Description**: Git repository directory to create patches from
-- **Default**: `/tmp`
-- **Examples**:
-    - Codespace: `/workspaces/my-project`
-    - Windows: `C:\Projects\my-project`
-    - WSL/Linux: `/home/user/projects/my-project`
 
 ### `patchitup.projectName`
 
@@ -130,7 +120,7 @@ Configure the extension in VS Code settings (File > Preferences > Settings):
 2. **Smart Path Resolution**: Uses the appropriate file system scheme based on your environment
 3. **Git Diff**: Uses `git diff HEAD` to capture all uncommitted changes
 4. **Flexible Storage**: For remote environments, uses VS Code's `vscode-local` URI scheme to access host files; for local environments, uses direct file access
-5. **Patch Application**: Applies patches using `git apply` in your source directory
+5. **Patch Application**: Applies patches using `git apply` in the currently open git repository root
 6. **Clean Up**: Temporary files are automatically removed after applying patches
 
 ## 📝 Patch File Format
@@ -150,10 +140,11 @@ Example: `tmp_20251126143052.patch`
 
 ## 🐛 Troubleshooting
 
-### "Source directory does not exist"
+### "No git repository is currently open in VS Code"
 
-- Click "Use Current Workspace" to automatically set the directory
-- Or manually configure `patchitup.sourceDirectory` in settings
+- Open a folder that is a git repository (has a `.git` directory)
+- Or initialize one in the folder: `git init`
+- If you have multiple repositories open, focus a file from the repo you want and retry
 
 ### "Please configure the destination path"
 

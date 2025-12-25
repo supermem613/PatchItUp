@@ -90,8 +90,9 @@ If you need to test changes frequently:
 
 When testing in a Codespace, make sure to set:
 
-- **Source Directory**: `/tmp` (or your Codespace path)
 - **Destination Path**: A path on your **local machine** (e.g., `C:\Users\foo\patches`)
 - **Project Name**: Your project identifier
 
-The extension will read files from the Codespace but write the patch to your local machine.
+PatchItUp uses the git repository root currently open in VS Code (no Source Directory setting).
+
+The extension will read files from the Codespace repo but write the patch to your local machine.
