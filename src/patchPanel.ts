@@ -4,7 +4,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import { type PatchFileEdit, parseGitPatchFileEdits } from './patchParsing';
 import { applyUnifiedDiffToText, parseUnifiedDiffFiles, type UnifiedDiffFile } from './unifiedDiff';
-import { applyPatchWithGit, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
+import { applyPatchWithGit, getStripCandidates, guessPreferredStripLevel, selectStripLevelForPatch } from './gitApply';
 import {
     getTempRootLocation,
     isRemoteSession,
@@ -394,144 +394,172 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     }
 
     private async createPatch(sourceDir: string, projectName: string, destPath: string) {
-        try {
-            if (!destPath) {
-                vscode.window.showErrorMessage('Please configure the destination path');
-                return;
-            }
+        await withStepProgress({
+            title: 'PatchItUp: Create patch',
+            totalSteps: 6,
+            task: async (steps) => {
+                try {
+                    steps.next('Validate settings');
+                    if (!destPath) {
+                        vscode.window.showErrorMessage('Please configure the destination path');
+                        return;
+                    }
 
-            const isRemote = vscode.env.remoteName !== undefined;
-            const isRemoteLocal = await this.isRemoteLocalMachine();
-            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
-            console.log('createPatch:', { isRemote, isRemoteLocal, useVscodeLocal, sourceDir, destPath });
+                    steps.next('Detect environment');
+                    const isRemote = vscode.env.remoteName !== undefined;
+                    const isRemoteLocal = await this.isRemoteLocalMachine();
+                    const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+                    console.log('createPatch:', { isRemote, isRemoteLocal, useVscodeLocal, sourceDir, destPath });
 
-            // Check for changes using executeGitCommand
-            let patchContent: string;
-            try {
-                patchContent = await this.executeGitCommand(['diff', 'HEAD'], sourceDir);
+                    steps.next('Generate patch');
+                    // Check for changes using executeGitCommand
+                    let patchContent: string;
+                    try {
+                        steps.detail('Running git diff');
+                        patchContent = await this.executeGitCommand(['diff', 'HEAD'], sourceDir);
+                        if (!patchContent.trim()) {
+                            vscode.window.showInformationMessage('No changes to create a patch from.');
+                            return;
+                        }
+                    } catch (error: any) {
+                        // Provide context-appropriate error message
+                        let msg: string;
+                        if (isRemote && !isRemoteLocal) {
+                            msg = `Could not access source directory in remote environment: ${sourceDir}\n\n${error.message}`;
+                        } else if (isRemote && isRemoteLocal) {
+                            msg = `Could not access source directory (local remote): ${sourceDir}\n\n${error.message}`;
+                        } else {
+                            msg = `Could not access source directory: ${sourceDir}\n\n${error.message}`;
+                        }
+                        vscode.window.showErrorMessage(msg);
+                        return;
+                    }
 
-                if (!patchContent.trim()) {
-                    vscode.window.showInformationMessage('No changes to create a patch from.');
-                    return;
+                    if (!patchContent.trim()) {
+                        vscode.window.showInformationMessage('No changes to create a patch from.');
+                        return;
+                    }
+
+                    steps.next('Create patch file');
+                    // Generate filename with timestamp
+                    const now = new Date();
+                    const timestamp = [
+                        now.getFullYear(),
+                        String(now.getMonth() + 1).padStart(2, '0'),
+                        String(now.getDate()).padStart(2, '0'),
+                        String(now.getHours()).padStart(2, '0'),
+                        String(now.getMinutes()).padStart(2, '0'),
+                        String(now.getSeconds()).padStart(2, '0')
+                    ].join('');
+
+                    const filename = `${projectName}_${timestamp}.patch`;
+
+                    // Write using VS Code's file system API with appropriate scheme
+                    const encoder = new TextEncoder();
+                    const patchBytes = encoder.encode(patchContent);
+
+                    let destinationUri = await this.getLocalFileUri(path.join(destPath, filename));
+                    let dirUri = vscode.Uri.joinPath(destinationUri, '..');
+
+                    try {
+                        steps.detail('Writing patch file');
+                        console.log('Attempting to write patch to:', destinationUri.toString());
+                        await vscode.workspace.fs.createDirectory(dirUri);
+                        await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
+                        console.log('Successfully wrote patch');
+                    } catch (error: any) {
+                        // If vscode-local fails and we were using it, try regular file scheme as fallback
+                        console.log('Write failed, error:', error, 'code:', error.code);
+                        if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
+                            steps.detail('Retrying write with file scheme');
+                            console.log('Fallback: trying regular file scheme for write');
+                            destinationUri = vscode.Uri.file(path.join(destPath, filename));
+                            dirUri = vscode.Uri.joinPath(destinationUri, '..');
+                            await vscode.workspace.fs.createDirectory(dirUri);
+                            await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
+                            console.log('Successfully wrote patch with file scheme');
+                        } else {
+                            throw error;
+                        }
+                    }
+
+                    steps.next('Refresh patch list');
+                    vscode.window.showInformationMessage(`Patch created: ${filename}`);
+                    await this.refreshPatchList(destPath);
+
+                    steps.next('Done');
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    vscode.window.showErrorMessage(`Failed to create patch: ${errorMessage}`);
                 }
-            } catch (error: any) {
-                // Provide context-appropriate error message
-                let msg: string;
-                if (isRemote && !isRemoteLocal) {
-                    msg = `Could not access source directory in remote environment: ${sourceDir}\n\n${error.message}`;
-                } else if (isRemote && isRemoteLocal) {
-                    msg = `Could not access source directory (local remote): ${sourceDir}\n\n${error.message}`;
-                } else {
-                    msg = `Could not access source directory: ${sourceDir}\n\n${error.message}`;
-                }
-                vscode.window.showErrorMessage(msg);
-                return;
             }
-
-            if (!patchContent.trim()) {
-                vscode.window.showInformationMessage('No changes to create a patch from.');
-                return;
-            }
-
-            // Generate filename with timestamp
-            const now = new Date();
-            const timestamp = [
-                now.getFullYear(),
-                String(now.getMonth() + 1).padStart(2, '0'),
-                String(now.getDate()).padStart(2, '0'),
-                String(now.getHours()).padStart(2, '0'),
-                String(now.getMinutes()).padStart(2, '0'),
-                String(now.getSeconds()).padStart(2, '0')
-            ].join('');
-            
-            const filename = `${projectName}_${timestamp}.patch`;
-            
-            // Write using VS Code's file system API with appropriate scheme
-            const encoder = new TextEncoder();
-            const patchBytes = encoder.encode(patchContent);
-            
-            let destinationUri = await this.getLocalFileUri(path.join(destPath, filename));
-            let dirUri = vscode.Uri.joinPath(destinationUri, '..');
-            
-            try {
-                console.log('Attempting to write patch to:', destinationUri.toString());
-                await vscode.workspace.fs.createDirectory(dirUri);
-                await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
-                console.log('Successfully wrote patch');
-            } catch (error: any) {
-                // If vscode-local fails and we were using it, try regular file scheme as fallback
-                console.log('Write failed, error:', error, 'code:', error.code);
-                if (useVscodeLocal && (error.code === 'ENOPRO' || error.message?.includes('No file system provider'))) {
-                    console.log('Fallback: trying regular file scheme for write');
-                    destinationUri = vscode.Uri.file(path.join(destPath, filename));
-                    dirUri = vscode.Uri.joinPath(destinationUri, '..');
-                    await vscode.workspace.fs.createDirectory(dirUri);
-                    await vscode.workspace.fs.writeFile(destinationUri, patchBytes);
-                    console.log('Successfully wrote patch with file scheme');
-                } else {
-                    throw error;
-                }
-            }
-
-            vscode.window.showInformationMessage(`Patch created: ${filename}`);
-            await this.refreshPatchList(destPath);
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            vscode.window.showErrorMessage(`Failed to create patch: ${errorMessage}`);
-        }
+        });
     }
 
     private async applyPatch(patchFile: string, sourceDir: string) {
-        try {
-            if (!patchFile) {
-                vscode.window.showWarningMessage('Please select a patch file');
-                return;
-            }
+        await withStepProgress({
+            title: 'PatchItUp: Apply patch',
+            totalSteps: 5,
+            task: async (steps) => {
+                try {
+                    steps.next('Validate selection');
+                    if (!patchFile) {
+                        vscode.window.showWarningMessage('Please select a patch file');
+                        return;
+                    }
 
-            const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
+                    steps.next('Load patch content');
+                    const patchContent = await this.readPatchFromConfiguredDestination(patchFile);
 
-            try {
-                const preferredStrip = guessPreferredStripLevel(patchContent);
+                    try {
+                        steps.next('Detect strip level');
+                        steps.detail('Running git apply --check/--stat');
+                        const preferredStrip = guessPreferredStripLevel(patchContent);
 
-                const selection = await selectStripLevelForPatch({
-                    patchContent,
-                    cwd: sourceDir,
-                    preferredStrip,
-                    runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
-                        this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
-                });
+                        const selection = await selectStripLevelForPatch({
+                            patchContent,
+                            cwd: sourceDir,
+                            preferredStrip,
+                            runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
+                                this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                        });
 
-                this.logger.info('applyPatch: selected git apply strip level', {
-                    selectedStrip: selection.selectedStrip,
-                    stripCandidates: selection.stripCandidates
-                });
+                        this.logger.info('applyPatch: selected git apply strip level', {
+                            selectedStrip: selection.selectedStrip,
+                            stripCandidates: selection.stripCandidates
+                        });
 
-                const result = await applyPatchWithGit({
-                    patchContent,
-                    cwd: sourceDir,
-                    stripLevel: selection.selectedStrip,
-                    runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
-                        this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
-                });
+                        steps.next('Apply patch');
+                        steps.detail('Running git apply');
+                        const result = await applyPatchWithGit({
+                            patchContent,
+                            cwd: sourceDir,
+                            stripLevel: selection.selectedStrip,
+                            runGit: async ({ args, cwd, allowedExitCodes, stdin }) =>
+                                this.executeGitCommandResult(args, cwd, allowedExitCodes ?? [0], stdin)
+                        });
 
-                const trimmed = result.output.trim();
-                this.logger.info('applyPatch: git apply output', { exitCode: result.exitCode, output: trimmed });
+                        const trimmed = result.output.trim();
+                        this.logger.info('applyPatch: git apply output', { exitCode: result.exitCode, output: trimmed });
 
-                const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
-                if (result.exitCode !== 0 || isSkippedOutput(trimmed)) {
-                    throw new Error(trimmed || `git apply returned exit code ${result.exitCode}`);
+                        const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
+                        if (result.exitCode !== 0 || isSkippedOutput(trimmed)) {
+                            throw new Error(trimmed || `git apply returned exit code ${result.exitCode}`);
+                        }
+
+                        steps.next('Done');
+                        vscode.window.showInformationMessage(`Patch applied successfully: ${patchFile}`);
+                    } catch (error: any) {
+                        this.logger.error('applyPatch failed', { error: error?.message ?? String(error) });
+                        vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
+                    }
+                } catch (error) {
+                    const errorMessage = error instanceof Error ? error.message : String(error);
+                    this.logger.error('applyPatch threw', { error: errorMessage });
+                    vscode.window.showErrorMessage(`Error applying patch: ${errorMessage}`);
                 }
-
-                vscode.window.showInformationMessage(`Patch applied successfully: ${patchFile}`);
-            } catch (error: any) {
-                this.logger.error('applyPatch failed', { error: error?.message ?? String(error) });
-                vscode.window.showErrorMessage(`Failed to apply patch: ${error.message || error}`);
             }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('applyPatch threw', { error: errorMessage });
-            vscode.window.showErrorMessage(`Error applying patch: ${errorMessage}`);
-        }
+        });
     }
 
     private async diffPatch(patchFile: string, sourceDir: string) {
@@ -895,17 +923,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
             if (!usedBlobPreview && !usedInProcessApplyPreview) {
                 steps.detail('Applying patch in temp workspace');
-                // Write patch file into BOTH trees so we can apply/reverse-apply using a relative filename.
-                const tempPatchFileName = '.patchitup-diff-temp.patch';
-                const tempPatchUriOriginal = vscode.Uri.joinPath(originalRootUri, tempPatchFileName);
-                const tempPatchUriPatched = vscode.Uri.joinPath(patchedRootUri, tempPatchFileName);
-                await vscode.workspace.fs.writeFile(tempPatchUriOriginal, encoder.encode(patchContent));
-                await vscode.workspace.fs.writeFile(tempPatchUriPatched, encoder.encode(patchContent));
-
                 const isSkippedOutput = (out: string) => /Skipped patch/i.test(out);
 
                 const preferredStrip = guessPreferredStripLevel(patchContent);
-                const stripCandidates = Array.from(new Set([preferredStrip, 0, 1, 2, 3]));
+                const stripCandidates = getStripCandidates(preferredStrip);
 
                 const expectedPaths = fileEdits
                     .map(e => (e.status === 'deleted' ? e.oldPath : e.newPath))
@@ -915,9 +936,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     for (const strip of stripCandidates) {
                         try {
                             const stat = await this.executeGitCommandResult(
-                                ['apply', `-p${strip}`, '--stat', tempPatchFileName],
+                                ['apply', `-p${strip}`, '--stat', '-'],
                                 originalRootShellPath,
-                                [0, 1]
+                                [0, 1],
+                                patchContent
                             );
                             const statOut = stat.output.trim();
 
@@ -940,9 +962,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     for (const strip of stripCandidates) {
                         try {
                             const stat = await this.executeGitCommandResult(
-                                ['apply', `-p${strip}`, '--stat', tempPatchFileName],
+                                ['apply', `-p${strip}`, '--stat', '-'],
                                 originalRootShellPath,
-                                [0, 1]
+                                [0, 1],
+                                patchContent
                             );
                             const statOut = stat.output.trim();
                             if (stat.exitCode === 0 && statOut && statOut !== '0 files changed') {
@@ -962,7 +985,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
                 // Show how git interprets the patch paths/stat.
                 try {
-                    const stat = await this.executeGitCommandResult(['apply', `-p${stripLevel}`, '--stat', tempPatchFileName], originalRootShellPath, [0, 1]);
+                    const stat = await this.executeGitCommandResult(['apply', `-p${stripLevel}`, '--stat', '-'], originalRootShellPath, [0, 1], patchContent);
                     this.logger.info('diffPatch: git apply --stat', { exitCode: stat.exitCode, output: stat.output.trim() });
                 } catch (e) {
                     this.logger.warn('diffPatch: git apply --stat failed', { error: e instanceof Error ? e.message : String(e) });
@@ -995,16 +1018,18 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 let reverseCheckExitCode = 1;
                 try {
                     const check = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--check', '--whitespace=nowarn', tempPatchFileName],
+                        ['apply', `-p${stripLevel}`, '--check', '--whitespace=nowarn', '-'],
                         originalRootShellPath,
-                        [0, 1]
+                        [0, 1],
+                        patchContent
                     );
                     this.logger.info('diffPatch: git apply --check', { exitCode: check.exitCode, output: check.output.trim() });
 
                     const reverseCheck = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--reverse', '--check', '--whitespace=nowarn', tempPatchFileName],
+                        ['apply', `-p${stripLevel}`, '--reverse', '--check', '--whitespace=nowarn', '-'],
                         originalRootShellPath,
-                        [0, 1]
+                        [0, 1],
+                        patchContent
                     );
                     reverseCheckExitCode = reverseCheck.exitCode;
                     this.logger.info('diffPatch: git apply --reverse --check', { exitCode: reverseCheck.exitCode, output: reverseCheck.output.trim() });
@@ -1020,9 +1045,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     await logTreeHashes('diffPatch: original hashes (pre reverse-apply)', originalRootShellPath);
                     try {
                         const reverseApply = await this.executeGitCommandResult(
-                            ['apply', `-p${stripLevel}`, '--reverse', '--verbose', '--whitespace=nowarn', tempPatchFileName],
+                            ['apply', `-p${stripLevel}`, '--reverse', '--verbose', '--whitespace=nowarn', '-'],
                             originalRootShellPath,
-                            [0, 1]
+                            [0, 1],
+                            patchContent
                         );
                         const trimmed = reverseApply.output.trim();
                         this.logger.info('diffPatch: git apply --reverse --verbose', { exitCode: reverseApply.exitCode, output: trimmed });
@@ -1062,9 +1088,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 try {
                     await logTreeHashes('diffPatch: patched hashes (pre apply)', patchedRootShellPath);
                     const apply = await this.executeGitCommandResult(
-                        ['apply', `-p${stripLevel}`, '--verbose', '--whitespace=nowarn', tempPatchFileName],
+                        ['apply', `-p${stripLevel}`, '--verbose', '--whitespace=nowarn', '-'],
                         patchedRootShellPath,
-                        [0, 1]
+                        [0, 1],
+                        patchContent
                     );
                     const trimmed = apply.output.trim();
                     this.logger.info('diffPatch: git apply --verbose', { exitCode: apply.exitCode, output: trimmed });
@@ -1075,22 +1102,16 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 } catch (error: any) {
                     // Try a best-effort preview by allowing rejects so we can still show partial diffs.
                     try {
-                        await this.executeGitCommand(['apply', `-p${stripLevel}`, '--reject', '--whitespace=nowarn', tempPatchFileName], patchedRootShellPath, [0, 1]);
+                        await this.executeGitCommandResult(
+                            ['apply', `-p${stripLevel}`, '--reject', '--whitespace=nowarn', '-'],
+                            patchedRootShellPath,
+                            [0, 1],
+                            patchContent
+                        );
                         vscode.window.showWarningMessage('Patch did not apply cleanly; showing best-effort diff preview with rejects.');
                     } catch {
                         vscode.window.showErrorMessage(`Failed to apply patch for diff preview: ${error.message || error}`);
                         return;
-                    }
-                } finally {
-                    try {
-                        await vscode.workspace.fs.delete(tempPatchUriOriginal);
-                    } catch {
-                        // Ignore cleanup errors
-                    }
-                    try {
-                        await vscode.workspace.fs.delete(tempPatchUriPatched);
-                    } catch {
-                        // Ignore cleanup errors
                     }
                 }
             }
