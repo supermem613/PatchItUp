@@ -189,10 +189,12 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             const cdPart = `cd /d ${quoteCmd(cwdForShell)}`;
             const redirIn = inPath ? ` < ${quoteCmd(inPath)}` : '';
             const gitPart = `git ${gitArgsJoined}${redirIn} > ${quoteCmd(outPath)} 2>&1`;
-            const codePart = `echo %ERRORLEVEL% > ${quoteCmd(codePath)}`;
-            const cmdLine = `${cdPart} && ${gitPart} & ${codePart} & exit /b 0`;
+            // IMPORTANT: %ERRORLEVEL% is expanded when the whole command line is parsed, not after git runs.
+            // Use delayed expansion (!ERRORLEVEL!) so we capture the real git exit code on Windows.
+            const codePart = `echo !ERRORLEVEL! > ${quoteCmd(codePath)}`;
+            const cmdLine = `setlocal EnableDelayedExpansion & ${cdPart} && ${gitPart} & ${codePart} & exit /b 0`;
             shellCommand = `cmd.exe`;
-            shellArgs = ['/d', '/s', '/c', cmdLine];
+            shellArgs = ['/d', '/v:on', '/s', '/c', cmdLine];
         }
 
         const taskLabel = `PatchItUp: git (${runId})`;
@@ -696,8 +698,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
             }
             this.logger.info('diffPatch: patch stats', { hunkCount, addLines, delLines });
 
-                    steps.next('Parse patch file list');
-                    const fileEdits = parseGitPatchFileEdits(patchContent);
+            steps.next('Parse patch file list');
+            const fileEdits = parseGitPatchFileEdits(patchContent);
             if (fileEdits.length === 0) {
                 vscode.window.showWarningMessage('Selected patch contains no file diffs');
                 return;
@@ -719,8 +721,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 return 0;
             };
 
-                    steps.next('Prepare preview workspace');
-                    const remoteName = vscode.env.remoteName;
+            steps.next('Prepare preview workspace');
+            const remoteName = vscode.env.remoteName;
             const isRemote = isRemoteSession(remoteName);
             const normalizedSourceDir = normalizeCwd(sourceDir, remoteName);
 
