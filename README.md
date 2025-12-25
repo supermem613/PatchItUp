@@ -63,6 +63,10 @@ Notes:
 - This does **not** modify your working directory.
 - If the patch was created from a different repo/branch/history than your current `Source Directory`, PatchItUp may fall back to a best-effort preview (some hunks may be rejected).
 
+### Editing Patch Files
+
+- Double-click a patch in the **Available Patches** list to open the `.patch` file in VS Code for editing.
+
 ### Command Palette
 
 You can also use the command palette (Ctrl+Shift+P):

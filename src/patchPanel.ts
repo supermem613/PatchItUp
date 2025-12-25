@@ -246,6 +246,9 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 case 'diffPatch':
                     await this.diffPatch(data.patchFile, data.sourceDir);
                     break;
+                case 'openPatch':
+                    await this.openPatchForEdit(data.patchFile);
+                    break;
                 case 'refreshPatches':
                     await this.refreshPatchList(data.destPath);
                     break;
@@ -738,6 +741,42 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    private async openPatchForEdit(patchFile: string): Promise<void> {
+        try {
+            if (!patchFile) {
+                vscode.window.showWarningMessage('Please select a patch file');
+                return;
+            }
+
+            const config = vscode.workspace.getConfiguration('patchitup');
+            const destPath = config.get<string>('destinationPath', '');
+            if (!destPath) {
+                vscode.window.showErrorMessage('Destination path not configured');
+                return;
+            }
+
+            const useVscodeLocal = await this.shouldUseVscodeLocalScheme();
+            let patchUri: vscode.Uri;
+            try {
+                patchUri = await this.getLocalFileUri(path.join(destPath, patchFile));
+                await vscode.workspace.fs.stat(patchUri);
+            } catch (error: any) {
+                if (useVscodeLocal && (error?.code === 'ENOPRO' || error?.message?.includes('No file system provider'))) {
+                    patchUri = vscode.Uri.file(path.join(destPath, patchFile));
+                    await vscode.workspace.fs.stat(patchUri);
+                } else {
+                    throw error;
+                }
+            }
+
+            const doc = await vscode.workspace.openTextDocument(patchUri);
+            await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            vscode.window.showErrorMessage(`Failed to open patch: ${errorMessage}`);
+        }
+    }
+
     private getUriForDirectory(dirPath: string): vscode.Uri {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
@@ -1041,6 +1080,13 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     applyBtn.classList.remove('secondary-button');
                     diffBtn.disabled = false;
                     diffBtn.classList.remove('secondary-button');
+                });
+                item.addEventListener('dblclick', () => {
+                    // Double-click opens the patch file for editing
+                    vscode.postMessage({
+                        type: 'openPatch',
+                        patchFile: patch
+                    });
                 });
                 patchList.appendChild(item);
             });
