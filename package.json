@@ -72,7 +72,8 @@
                 "patchitup.projectName": {
                     "type": "string",
                     "default": "project",
-                    "description": "Project name to prefix patch files"
+                    "description": "Project name to prefix patch files",
+                    "scope": "machine-overridable"
                 },
                 "patchitup.destinationPath": {
                     "type": "string",
