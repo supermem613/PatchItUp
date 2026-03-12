@@ -1820,6 +1820,50 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         .refresh-button:hover {
             opacity: 1;
         }
+        .search-box {
+            margin-top: 8px;
+            position: relative;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 4px 20px 4px 6px;
+            font-size: 12px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            box-sizing: border-box;
+        }
+        .search-box input::placeholder {
+            color: var(--vscode-input-placeholderForeground);
+        }
+        .search-clear {
+            position: absolute;
+            right: 4px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--vscode-foreground);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+            opacity: 0.7;
+            display: none;
+            width: 14px;
+            height: 14px;
+            min-width: 14px;
+            flex: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .search-clear:hover {
+            opacity: 1;
+        }
+        .search-clear.visible {
+            display: inline-flex;
+        }
         .button-container-bottom {
             margin-top: 10px;
         }
@@ -1843,6 +1887,10 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         <span>Available Patches</span>
         <button id="refreshBtn" class="refresh-button" title="Refresh patch list" aria-label="Refresh">↻</button>
     </div>
+    <div class="search-box">
+        <input type="text" id="patchSearch" placeholder="Filter patches..." aria-label="Filter patches">
+        <button id="searchClear" class="search-clear" title="Clear filter" aria-label="Clear filter">✕</button>
+    </div>
     <div class="patch-list" id="patchList">
         <div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">
             No patches found
@@ -1857,6 +1905,7 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         let selectedPatch = null;
+        let allPatches = [];
 
         // Request settings on load
         vscode.postMessage({ type: 'getSettings' });
@@ -1933,24 +1982,40 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
         // Update patch list
         function updatePatchList(patches) {
+            allPatches = patches || [];
+            const filter = document.getElementById('patchSearch').value;
+            renderFilteredPatches(filter);
+        }
+
+        function renderFilteredPatches(filter) {
             const patchList = document.getElementById('patchList');
             const applyBtn = document.getElementById('applyPatchBtn');
             const diffBtn = document.getElementById('diffPatchBtn');
-            
-            if (!patches || patches.length === 0) {
-                patchList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">No patches found</div>';
-                selectedPatch = null;
-                applyBtn.disabled = true;
-                applyBtn.classList.add('secondary-button');
-                diffBtn.disabled = true;
-                diffBtn.classList.add('secondary-button');
+            const query = (filter || '').toLowerCase();
+            const filtered = query
+                ? allPatches.filter(p => p.toLowerCase().includes(query))
+                : allPatches;
+
+            if (filtered.length === 0) {
+                const msg = allPatches.length === 0 ? 'No patches found' : 'No matching patches';
+                patchList.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--vscode-descriptionForeground);">' + msg + '</div>';
+                if (!filtered.includes(selectedPatch)) {
+                    selectedPatch = null;
+                    applyBtn.disabled = true;
+                    applyBtn.classList.add('secondary-button');
+                    diffBtn.disabled = true;
+                    diffBtn.classList.add('secondary-button');
+                }
                 return;
             }
 
             patchList.innerHTML = '';
-            patches.forEach(patch => {
+            filtered.forEach(patch => {
                 const item = document.createElement('div');
                 item.className = 'patch-item';
+                if (patch === selectedPatch) {
+                    item.classList.add('selected');
+                }
                 item.textContent = patch;
                 item.addEventListener('click', () => {
                     document.querySelectorAll('.patch-item').forEach(i => i.classList.remove('selected'));
@@ -1962,7 +2027,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     diffBtn.classList.remove('secondary-button');
                 });
                 item.addEventListener('dblclick', () => {
-                    // Double-click opens the patch file for editing
                     vscode.postMessage({
                         type: 'openPatch',
                         patchFile: patch
@@ -1970,7 +2034,32 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                 });
                 patchList.appendChild(item);
             });
+
+            if (!filtered.includes(selectedPatch)) {
+                selectedPatch = null;
+                applyBtn.disabled = true;
+                applyBtn.classList.add('secondary-button');
+                diffBtn.disabled = true;
+                diffBtn.classList.add('secondary-button');
+            }
         }
+
+        // Filter patches as user types
+        const patchSearchInput = document.getElementById('patchSearch');
+        const searchClearBtn = document.getElementById('searchClear');
+
+        patchSearchInput.addEventListener('input', (e) => {
+            const val = e.target.value;
+            searchClearBtn.classList.toggle('visible', val.length > 0);
+            renderFilteredPatches(val);
+        });
+
+        searchClearBtn.addEventListener('click', () => {
+            patchSearchInput.value = '';
+            searchClearBtn.classList.remove('visible');
+            renderFilteredPatches('');
+            patchSearchInput.focus();
+        });
 
         // Refresh patches when destination path changes
         document.getElementById('destPath').addEventListener('change', (e) => {
