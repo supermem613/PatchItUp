@@ -2,7 +2,7 @@
     "name": "patchitup",
     "displayName": "PatchItUp",
     "description": "Create and apply git patches for local repos, GitHub Codespaces, WSL, Dev Containers, and SSH remotes with an intuitive sidebar UI",
-    "version": "0.0.7",
+    "version": "0.0.8",
     "publisher": "supermem613",
     "license": "MIT",
     "icon": "images/icon.png",
@@ -100,11 +100,14 @@
         "@types/vscode": "^1.85.0",
         "@types/node": "18.x",
         "@types/mocha": "^10.0.10",
-        "@typescript-eslint/eslint-plugin": "^6.13.0",
-        "@typescript-eslint/parser": "^6.13.0",
+        "@typescript-eslint/eslint-plugin": "^7.18.0",
+        "@typescript-eslint/parser": "^7.18.0",
         "eslint": "^8.54.0",
         "mocha": "^10.8.2",
         "prettier": "^3.5.1",
         "typescript": "^5.3.2"
+    },
+    "overrides": {
+        "serialize-javascript": "^7.0.3"
     }
 }
