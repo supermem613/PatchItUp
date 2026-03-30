@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { withStepProgress } from '../../progressSteps';
 
 const withMockedVscode = async <T>(vscodeStub: unknown, fn: () => Promise<T> | T): Promise<T> => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     const Module = require('module') as typeof import('module');
     const originalLoad = (Module as unknown as { _load: unknown })._load as any;
 

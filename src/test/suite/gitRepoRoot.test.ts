@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 
 const withMockedVscode = async <T>(vscodeStub: unknown, fn: () => Promise<T> | T): Promise<T> => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     const Module = require('module') as typeof import('module');
     const originalLoad = (Module as unknown as { _load: unknown })._load as any;
 
@@ -14,9 +14,9 @@ const withMockedVscode = async <T>(vscodeStub: unknown, fn: () => Promise<T> | T
 
     // Ensure modules that import 'vscode' are re-evaluated per test.
     try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+         
         const resolved = require.resolve('../../gitRepoRoot');
-        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+         
         delete require.cache[resolved];
     } catch {
         // ignore if not resolvable yet
@@ -34,7 +34,7 @@ const withMockedModules = async <T>(
     clear: string[],
     fn: () => Promise<T> | T
 ): Promise<T> => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     const Module = require('module') as typeof import('module');
     const originalLoad = (Module as unknown as { _load: unknown })._load as any;
 
@@ -47,9 +47,9 @@ const withMockedModules = async <T>(
 
     for (const rel of clear) {
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const resolved = require.resolve(rel);
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+             
             delete require.cache[resolved];
         } catch {
             // ignore
@@ -74,7 +74,7 @@ describe('getOpenGitRepositoryRootPath', () => {
         await assert.rejects(
             () =>
                 withMockedVscode(vscodeStub, async () => {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                     
                     const { getOpenGitRepositoryRootPath } = require('../../gitRepoRoot');
                     await getOpenGitRepositoryRootPath();
                 }),
@@ -105,7 +105,7 @@ describe('getOpenGitRepositoryRootPath', () => {
         };
 
         const root = await withMockedVscode(vscodeStub, async () => {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { getOpenGitRepositoryRootPath } = require('../../gitRepoRoot');
             return await getOpenGitRepositoryRootPath();
         });
@@ -133,7 +133,7 @@ describe('getOpenGitRepositoryRootPath', () => {
         };
 
         const root = await withMockedVscode(vscodeStub, async () => {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { getOpenGitRepositoryRootPath } = require('../../gitRepoRoot');
             return await getOpenGitRepositoryRootPath();
         });
@@ -166,7 +166,7 @@ describe('getOpenGitRepositoryRootPath', () => {
             },
             ['../../gitRepoRoot'],
             async () => {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                 
                 const { getOpenGitRepositoryRootPath } = require('../../gitRepoRoot');
                 return await getOpenGitRepositoryRootPath();
             }
@@ -198,7 +198,7 @@ describe('getOpenGitRepositoryRootPath', () => {
                     },
                     ['../../gitRepoRoot'],
                     async () => {
-                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                         
                         const { getOpenGitRepositoryRootPath } = require('../../gitRepoRoot');
                         await getOpenGitRepositoryRootPath();
                     }

@@ -7,7 +7,7 @@ const withMockedModules = async <T>(
     clear: string[],
     fn: () => Promise<T> | T
 ): Promise<T> => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     const Module = require('module') as typeof import('module');
     const originalLoad = (Module as unknown as { _load: unknown })._load as any;
 
@@ -20,9 +20,9 @@ const withMockedModules = async <T>(
 
     for (const rel of clear) {
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const resolved = require.resolve(rel);
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+             
             delete require.cache[resolved];
         } catch {
             // ignore
@@ -100,7 +100,7 @@ describe('runGitTask', () => {
                 }
             },
             ShellExecution: class {
-                // eslint-disable-next-line @typescript-eslint/no-useless-constructor
+                 
                 constructor(public command: string, public args: string[]) {}
             },
             Task: class {
@@ -165,7 +165,7 @@ describe('runGitTask', () => {
             },
             ['../../gitTaskRunner'],
             async () => {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                 
                 const { runGitTask } = require('../../gitTaskRunner');
 
                 const workspaceFolderUri = makeUri(
@@ -277,7 +277,7 @@ describe('runGitTask', () => {
             },
             ['../../gitTaskRunner'],
             async () => {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                 
                 const { runGitTask } = require('../../gitTaskRunner');
 
                 const res = await runGitTask({
@@ -376,7 +376,7 @@ describe('runGitTask', () => {
                     },
                     ['../../gitTaskRunner'],
                     async () => {
-                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                         
                         const { runGitTask } = require('../../gitTaskRunner');
                         await runGitTask({ args: ['x'], cwd: 'C:\\repo' });
                     }
@@ -468,7 +468,7 @@ describe('runGitTask', () => {
             },
             ['../../gitTaskRunner'],
             async () => {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                 
                 const { runGitTask } = require('../../gitTaskRunner');
 
                 await runGitTask({

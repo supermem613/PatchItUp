@@ -3,7 +3,7 @@ import type * as vscodeType from 'vscode';
 // Note: unit tests in this repo run in a plain Node context where `require('vscode')`
 // is not available. Lazily load VS Code APIs only when needed.
 const getVscode = (): typeof vscodeType => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     return require('vscode');
 };
 

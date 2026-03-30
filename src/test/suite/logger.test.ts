@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 
 const withMockedVscode = async <T>(vscodeStub: unknown, fn: () => Promise<T> | T): Promise<T> => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+     
     const Module = require('module') as typeof import('module');
     const originalLoad = (Module as unknown as { _load: unknown })._load as any;
 
@@ -30,9 +30,9 @@ describe('Logger', () => {
 
         await withMockedVscode({}, async () => {
             // Ensure we load the module with the current vscode stub.
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             delete require.cache[require.resolve('../../logger')];
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { Logger } = require('../../logger') as typeof import('../../logger');
 
             const logger = new Logger(fakeChannel as any);
@@ -61,9 +61,9 @@ describe('Logger', () => {
         circular.self = circular;
 
         await withMockedVscode({}, async () => {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             delete require.cache[require.resolve('../../logger')];
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { Logger } = require('../../logger') as typeof import('../../logger');
             const logger = new Logger(fakeChannel as any);
 
@@ -94,9 +94,9 @@ describe('Logger', () => {
         };
 
         await withMockedVscode(vscodeStub, async () => {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             delete require.cache[require.resolve('../../logger')];
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
+             
             const { createLogger } = require('../../logger') as typeof import('../../logger');
 
             const logger = createLogger();
