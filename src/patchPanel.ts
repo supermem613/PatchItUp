@@ -27,6 +27,22 @@ import { withStepProgress } from './progressSteps';
 import { getOpenGitRepositoryRootPath, NoGitRepositoryOpenError } from './gitRepoRoot';
 import { runGitTask } from './gitTaskRunner';
 
+// Concatenates a list of byte chunks into a single Uint8Array. Used for assembling
+// the working-tree snapshot patch from multiple git invocations.
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+    let total = 0;
+    for (const p of parts) {
+        total += p.byteLength;
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const p of parts) {
+        out.set(p, offset);
+        offset += p.byteLength;
+    }
+    return out;
+}
+
 export class PatchPanelProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'patchitup.panelView';
     private _view?: vscode.WebviewView;
@@ -121,6 +137,42 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
     ): Promise<string> {
         const result = await this.executeGitCommandResult(args, cwd, allowedExitCodes);
         return result.output;
+    }
+
+    // Same as executeGitCommand but returns raw stdout bytes — required for binary-safe
+    // capture (e.g. `git diff --binary` may emit base85-encoded binary patches that must
+    // not be UTF-8 round-tripped).
+    private async executeGitCommandBytes(
+        args: string[],
+        cwd: string,
+        allowedExitCodes: number[] = [0]
+    ): Promise<Uint8Array> {
+        const remoteName = vscode.env.remoteName;
+        const normalizedCwd = normalizeCwd(cwd, remoteName);
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+
+        this.logger.info('executeGitCommandBytes', {
+            cwd,
+            normalizedCwd,
+            remoteName,
+            args,
+            usingTasks: true
+        });
+
+        const result = await runGitTask({
+            args,
+            cwd,
+            allowedExitCodes,
+            workspaceFolder
+        });
+
+        this.logger.info('executeGitCommandBytes.output', {
+            exitCode: result.exitCode,
+            stdoutBytes: result.stdout.byteLength,
+            stderr: result.stderr.trim()
+        });
+
+        return result.stdout;
     }
 
     private async executeGitCommandResult(
@@ -441,6 +493,65 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
         await this.applyPatch(patchFile);
     }
 
+    // Captures every uncommitted change in the working tree as a single concatenated
+    // patch byte stream. Captures (a) staged + unstaged tracked changes, (b) untracked
+    // files, (c) binary content. Does not mutate index, worktree, refs, or reflog.
+    //
+    // Strategy:
+    //   1. `git diff HEAD --binary` — tracked changes (staged + unstaged + binary).
+    //   2. `git ls-files --others --exclude-standard -z` — list untracked file paths.
+    //   3. For each untracked path: `git diff --no-index --binary -- /dev/null <path>`
+    //      produces a self-contained "new file" hunk that concatenates cleanly with (1)
+    //      and re-applies via `git apply`. Exit code 1 from --no-index means "differences
+    //      found" and is expected.
+    //
+    // Returns an empty array if there are no changes.
+    private async captureWorkingTreeSnapshot(sourceDir: string): Promise<Uint8Array> {
+        const parts: Uint8Array[] = [];
+
+        // 1. Tracked changes — staged + unstaged + binary.
+        const tracked = await this.executeGitCommandBytes(
+            ['-c', 'core.quotepath=off', 'diff', 'HEAD', '--binary'],
+            sourceDir,
+            [0]
+        );
+        if (tracked.byteLength > 0) {
+            parts.push(tracked);
+        }
+
+        // 2. Untracked file list (NUL-separated, repo-relative).
+        const untrackedRaw = await this.executeGitCommand(
+            ['ls-files', '--others', '--exclude-standard', '-z'],
+            sourceDir,
+            [0]
+        );
+        const untrackedPaths = untrackedRaw.split('\0').filter((p) => p.length > 0);
+
+        // 3. Per-untracked-file diff against /dev/null.
+        for (const relPath of untrackedPaths) {
+            const fileDiff = await this.executeGitCommandBytes(
+                [
+                    '-c',
+                    'core.quotepath=off',
+                    'diff',
+                    '--no-index',
+                    '--binary',
+                    '--',
+                    '/dev/null',
+                    relPath
+                ],
+                sourceDir,
+                // exit 1 = differences found; expected for every untracked file.
+                [0, 1]
+            );
+            if (fileDiff.byteLength > 0) {
+                parts.push(fileDiff);
+            }
+        }
+
+        return concatBytes(parts);
+    }
+
     private async createPatch(projectName: string, destPath: string) {
         await withStepProgress({
             title: 'PatchItUp: Create patch',
@@ -465,6 +576,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
+                    // Flush dirty editor buffers so git sees the user's actual on-disk state.
+                    // Without this, unsaved tabs are invisible to `git diff` and look exactly
+                    // like "PatchItUp didn't capture my changes."
+                    await vscode.workspace.saveAll(false);
+
                     steps.next('Detect environment');
                     const isRemote = vscode.env.remoteName !== undefined;
                     const isRemoteLocal = await this.isRemoteLocalMachine();
@@ -478,12 +594,11 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                     });
 
                     steps.next('Generate patch');
-                    // Check for changes using executeGitCommand
-                    let patchContent: string;
+                    let patchBytes: Uint8Array;
                     try {
-                        steps.detail('Running git diff');
-                        patchContent = await this.executeGitCommand(['diff', 'HEAD'], sourceDir);
-                        if (!patchContent.trim()) {
+                        steps.detail('Capturing working tree snapshot');
+                        patchBytes = await this.captureWorkingTreeSnapshot(sourceDir);
+                        if (patchBytes.byteLength === 0) {
                             vscode.window.showInformationMessage(
                                 'No changes to create a patch from.'
                             );
@@ -503,11 +618,6 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
                         return;
                     }
 
-                    if (!patchContent.trim()) {
-                        vscode.window.showInformationMessage('No changes to create a patch from.');
-                        return;
-                    }
-
                     steps.next('Create patch file');
                     // Generate filename with timestamp
                     const now = new Date();
@@ -522,10 +632,8 @@ export class PatchPanelProvider implements vscode.WebviewViewProvider {
 
                     const filename = `${projectName}_${timestamp}.patch`;
 
-                    // Write using VS Code's file system API with appropriate scheme
-                    const encoder = new TextEncoder();
-                    const patchBytes = encoder.encode(patchContent);
-
+                    // Write raw bytes — never round-trip through TextEncoder, so binary
+                    // patch hunks survive.
                     let destinationUri = await this.getLocalFileUri(path.join(destPath, filename));
                     let dirUri = vscode.Uri.joinPath(destinationUri, '..');
 

@@ -19,7 +19,12 @@ export async function runGitTask({
     stdin,
     workspaceFolder,
     workspaceFolderUri
-}: RunGitTaskArgs): Promise<{ exitCode: number; output: string }> {
+}: RunGitTaskArgs): Promise<{
+    exitCode: number;
+    output: string;
+    stdout: Uint8Array;
+    stderr: string;
+}> {
     const remoteName = vscode.env.remoteName;
 
     const normalizedCwd = normalizeCwd(cwd, remoteName);
@@ -52,6 +57,7 @@ export async function runGitTask({
     await vscode.workspace.fs.createDirectory(runDirUri);
 
     const stdoutUri = vscode.Uri.joinPath(runDirUri, 'out.txt');
+    const stderrUri = vscode.Uri.joinPath(runDirUri, 'err.txt');
     const exitCodeUri = vscode.Uri.joinPath(runDirUri, 'code.txt');
     const stdinUri = stdin !== undefined ? vscode.Uri.joinPath(runDirUri, 'stdin.txt') : undefined;
 
@@ -63,6 +69,7 @@ export async function runGitTask({
 
     const cwdForShell = useBash ? normalizedCwd : cwd;
     const outPath = useBash ? stdoutUri.fsPath.replace(/\\/g, '/') : stdoutUri.fsPath;
+    const errPath = useBash ? stderrUri.fsPath.replace(/\\/g, '/') : stderrUri.fsPath;
     const codePath = useBash ? exitCodeUri.fsPath.replace(/\\/g, '/') : exitCodeUri.fsPath;
     const inPath = stdinUri
         ? useBash
@@ -75,6 +82,7 @@ export async function runGitTask({
         cwdForShell,
         args,
         outPath,
+        errPath,
         codePath,
         inPath
     });
@@ -111,14 +119,24 @@ export async function runGitTask({
     });
 
     const decoder = new TextDecoder('utf-8');
+    let stdoutBytes: Uint8Array = new Uint8Array(0);
     let output = '';
+    let stderr = '';
     let exitCode = -1;
     try {
         try {
-            const outBytes = await vscode.workspace.fs.readFile(stdoutUri);
-            output = decoder.decode(outBytes);
+            stdoutBytes = await vscode.workspace.fs.readFile(stdoutUri);
+            output = decoder.decode(stdoutBytes);
         } catch {
+            stdoutBytes = new Uint8Array(0);
             output = '';
+        }
+
+        try {
+            const errBytes = await vscode.workspace.fs.readFile(stderrUri);
+            stderr = decoder.decode(errBytes);
+        } catch {
+            stderr = '';
         }
 
         try {
@@ -150,11 +168,15 @@ export async function runGitTask({
     }
 
     if (!allowedExitCodes.includes(exitCode)) {
-        const trimmed = output.trim();
+        // Prefer stderr for the error message — that's where git puts diagnostics.
+        // Fall back to stdout only if stderr was empty.
+        const errTrim = stderr.trim();
+        const outTrim = output.trim();
+        const detail = errTrim || outTrim;
         throw new Error(
-            `Git command failed with exit code ${exitCode}${trimmed ? `\nGit output: ${trimmed}` : ''}`
+            `Git command failed with exit code ${exitCode}${detail ? `\nGit output: ${detail}` : ''}`
         );
     }
 
-    return { exitCode, output };
+    return { exitCode, output, stdout: stdoutBytes, stderr };
 }
